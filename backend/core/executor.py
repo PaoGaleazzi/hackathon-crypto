@@ -26,6 +26,7 @@ def simulate_execution(
     wallets: dict[Exchange, WalletBalance],
     current_bbo: dict[Exchange, BBO],
     now: datetime | None = None,
+    persist: bool = True,
 ) -> Trade:
     _now = now if now is not None else datetime.now(timezone.utc)
     buy_ex = opportunity.buy_exchange
@@ -109,7 +110,8 @@ def simulate_execution(
         latency_ms=(_now - opportunity.detected_at).total_seconds() * 1000,
         executed_at=_now,
     )
-    _persist_trade(trade)
+    if persist:
+        _persist_trade(trade)
     return trade
 
 
@@ -119,6 +121,7 @@ def simulate_execution_depth(
     wallets: dict[Exchange, WalletBalance],
     order_books: dict[Exchange, OrderBook],
     now: datetime | None = None,
+    persist: bool = True,
 ) -> Trade:
     """
     Walk-the-book execution. Consumes multiple order book levels, computing the
@@ -211,7 +214,8 @@ def simulate_execution_depth(
         latency_ms=(_now - opportunity.detected_at).total_seconds() * 1000,
         executed_at=_now,
     )
-    _persist_trade(trade)
+    if persist:
+        _persist_trade(trade)
     return trade
 
 

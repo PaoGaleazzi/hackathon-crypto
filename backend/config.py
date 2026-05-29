@@ -20,5 +20,12 @@ class Settings(BaseSettings):
 
     demo_mode: bool = False
 
+    # When true, every normalized BBO update is appended to a JSONL recording for
+    # later deterministic replay / A-B testing (see scripts/ab_test.py). Off by
+    # default — recording adds buffered file I/O to the hot path, so it is a
+    # dataset-capture mode, not for production trading.
+    record_mode: bool = False
+    record_path: str = "data/recordings/market_data.jsonl"
+
 
 settings = Settings()

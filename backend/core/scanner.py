@@ -46,13 +46,19 @@ def evaluate_microprice_signal(bbo_buy: BBO, bbo_sell: BBO) -> tuple[float, floa
     return micro_buy, micro_sell, confirms
 
 
-def scan_for_opportunities(bbo_state: dict[Exchange, BBO]) -> list[Opportunity]:
-    """Evaluate all N*(N-1) directed pairs for arbitrage. Phase 1."""
+def scan_for_opportunities(
+    bbo_state: dict[Exchange, BBO], now: datetime | None = None
+) -> list[Opportunity]:
+    """Evaluate all N*(N-1) directed pairs for arbitrage. Phase 1.
+
+    ``now`` stamps each Opportunity's ``detected_at``; defaults to wall-clock time.
+    Replay/backtests pass the tick clock so detection is fully deterministic."""
     if len(bbo_state) < 2:
         return []
 
     opportunities: list[Opportunity] = []
-    now = datetime.now(timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
     monitor = get_liquidity_monitor()
 
     for bbo_buy, bbo_sell in permutations(bbo_state.values(), 2):

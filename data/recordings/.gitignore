@@ -1,0 +1,2 @@
+# Recorded market data is large and machine-generated — keep the dir, not the data.
+*.jsonl

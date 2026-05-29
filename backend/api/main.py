@@ -9,6 +9,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +27,7 @@ from core.circuit_breaker import get_circuit_breaker
 from core.executor import build_rejected_trade, simulate_execution
 from core.fees import OrderSide, calculate_fee, estimate_slippage
 from core.rebalancer import RebalancePlan, plan_rebalance, set_latest_plan
+from core.replay import TickRecorder
 from core.risk_buffer import K_DEFAULT_95, passes_latency_buffer
 from core.stat_arb import get_stat_arb_detector, signal_to_dict
 from core.triangular import detect_triangular, set_latest_opportunities, triangular_to_dict
@@ -488,11 +490,33 @@ def _persist_demo_trade(trade: Trade) -> None:
     )
 
 
+# ── market-data recording (RECORD_MODE) ───────────────────────────────────────
+
+# Repo root: .../backend/api/main.py → parents[2]. A relative record_path is
+# resolved against it so the recording lands in the same place no matter the cwd.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_record_path() -> Path:
+    path = Path(settings.record_path)
+    return path if path.is_absolute() else _REPO_ROOT / path
+
+
 # ── lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     initialize_schema()
+
+    # RECORD_MODE: tee every BBO update to a JSONL recording via the bbo_state
+    # listener (the single point all adapters funnel through). Buffered append,
+    # one line per tick — replayable deterministically by core.replay.
+    recorder: TickRecorder | None = None
+    if settings.record_mode:
+        recorder = TickRecorder(_resolve_record_path())
+        bbo_state_module.set_update_listener(recorder.record)
+        logger.info("RECORD MODE active — appending BBO ticks to %s", recorder.path)
+
     tasks = [
         asyncio.create_task(binance.run(), name="binance-ws"),
         asyncio.create_task(binance.run_depth(), name="binance-depth"),
@@ -518,11 +542,21 @@ async def lifespan(app: FastAPI):
     gc.collect()
     gc.freeze()
 
-    logger.info("WS adapters + pipeline started (demo_mode=%s)", settings.demo_mode)
+    logger.info(
+        "WS adapters + pipeline started (demo_mode=%s, record_mode=%s)",
+        settings.demo_mode, settings.record_mode,
+    )
     yield
+    # Detach the recorder before cancelling adapters, then close it after they
+    # have stopped so no in-flight tick writes to an already-closed file.
+    if recorder is not None:
+        bbo_state_module.set_update_listener(None)
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    if recorder is not None:
+        recorder.close()
+        logger.info("RECORD MODE — wrote %d ticks to %s", recorder.count, recorder.path)
     close_connection()
     logger.info("Shutdown complete")
 
