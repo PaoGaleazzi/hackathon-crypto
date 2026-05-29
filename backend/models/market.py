@@ -84,3 +84,7 @@ class Opportunity(BaseModel):
     available_qty: float
     optimal_qty: float
     status: str = "PENDING"
+    # True when either leg's exchange is in DEGRADED liquidity state.
+    # The scorer applies a penalty but does not discard the opportunity —
+    # thin markets can still be profitable, just riskier.
+    degraded_liquidity: bool = False

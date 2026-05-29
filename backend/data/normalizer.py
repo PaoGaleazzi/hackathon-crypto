@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from models.market import BBO, Exchange
+from models.market import BBO, Exchange, OrderBookLevel
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,35 @@ def normalize_binance_bbo(raw: dict, received_at: datetime) -> BBO | None:
         ws_received_at=received_at,
         normalized_at=datetime.now(timezone.utc),
     )
+
+
+def normalize_binance_depth(
+    raw: dict,
+) -> tuple[list[OrderBookLevel], list[OrderBookLevel]] | None:
+    """Parse a Binance @depth10 snapshot into (bids, asks) order book level lists.
+
+    Binance sends bids descending and asks ascending (best-first), so we preserve
+    that order. Levels with zero quantity are filtered out before returning.
+    """
+    try:
+        bids = [
+            OrderBookLevel(price=float(p), qty=float(q))
+            for p, q in raw["bids"]
+            if float(q) > 0
+        ]
+        asks = [
+            OrderBookLevel(price=float(p), qty=float(q))
+            for p, q in raw["asks"]
+            if float(q) > 0
+        ]
+    except (KeyError, ValueError, TypeError) as exc:
+        logger.warning("Binance depth: parse error %s — raw: %s", exc, raw)
+        return None
+
+    if not bids or not asks:
+        return None
+
+    return bids, asks
 
 
 def normalize_kraken_bbo(raw: dict, received_at: datetime) -> BBO | None:

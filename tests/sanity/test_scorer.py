@@ -34,25 +34,27 @@ def _opp(
 # ── score_opportunity ─────────────────────────────────────────────────────────
 
 def test_score_higher_net_spread_wins_with_equal_latency():
-    # Opp A: net=200, buy_ask=70_000, qty=1.0, latency=10ms
-    #   pct = 200/70_000 = 0.002857, score = 0.002857/10 = 0.0002857
-    # Opp B: net=100, same params
-    #   pct = 100/70_000 = 0.001429, score = 0.001429/10 = 0.0001429
+    # New formula: score = E[profit] = p_fill·net - (1-p_fill)·penalty (liquidity=1).
+    # latency=10ms → p_fill = exp(-10/50) = exp(-0.2) = 0.818731
+    # penalty = fee_buy + fee_sell = 1.0·70_000·0.001 + 1.0·70_500·0.0026 = 70.0 + 183.3 = 253.3
+    # A (net=200): 0.818731·200 - 0.181269·253.3 = 163.7461 - 45.9155 = 117.8307
+    # B (net=100): 0.818731·100 - 0.181269·253.3 =  81.8731 - 45.9155 =  35.9576
     score_a = score_opportunity(_opp(net_spread=200.0, detected_ms_ago=10.0), _NOW)
     score_b = score_opportunity(_opp(net_spread=100.0, detected_ms_ago=10.0), _NOW)
-    assert score_a == pytest.approx(0.0002857, rel=1e-3)
-    assert score_b == pytest.approx(0.0001429, rel=1e-3)
+    assert score_a == pytest.approx(117.8307, rel=1e-4)
+    assert score_b == pytest.approx(35.9576, rel=1e-4)
     assert score_a > score_b
 
 
 def test_score_stale_opportunity_ranks_lower_than_fresh():
-    # Same spread, latency 10ms vs 510ms
-    # fresh  = (100/70_000) / 10  ≈ 0.0001429
-    # stale  = (100/70_000) / 510 ≈ 0.00000280
+    # Same spread, latency 10ms vs 510ms. The fill-probability decay dominates a
+    # stale opportunity: p_fill = exp(-510/50) = exp(-10.2) ≈ 3.716e-5, so almost
+    # all weight lands on the penalty term, driving E[profit] negative.
+    # stale = 3.716e-5·100 - (1-3.716e-5)·253.3 ≈ -253.2869
     score_fresh = score_opportunity(_opp(net_spread=100.0, detected_ms_ago=10.0), _NOW)
     score_stale = score_opportunity(_opp(net_spread=100.0, detected_ms_ago=510.0), _NOW)
     assert score_fresh > score_stale
-    assert score_stale == pytest.approx(100.0 / 70_000 / 510.0, rel=1e-3)
+    assert score_stale == pytest.approx(-253.2869, rel=1e-4)
 
 
 def test_score_liquidity_below_1_when_optimal_exceeds_available():
@@ -64,12 +66,14 @@ def test_score_liquidity_below_1_when_optimal_exceeds_available():
     assert score_partial == pytest.approx(score_full * 0.3, rel=1e-6)
 
 
-def test_score_latency_floor_at_1ms_when_detected_now():
-    # detected_at = now → latency = 0ms → floored to 1ms → finite score
-    opp = _opp(detected_ms_ago=0.0)
+def test_score_zero_latency_earns_full_net_spread():
+    # New formula has no 1ms floor: detected_at = now → latency = 0 → p_fill = 1.0,
+    # so the penalty term vanishes and E[profit] = net_spread exactly (liquidity=1).
+    # A 1ms-old opportunity already decays below that (p_fill = exp(-0.02) < 1).
+    opp = _opp(net_spread=100.0, detected_ms_ago=0.0)
     score = score_opportunity(opp, _NOW)
-    assert score > 0
-    assert score == pytest.approx(score_opportunity(_opp(detected_ms_ago=1.0), _NOW), rel=1e-6)
+    assert score == pytest.approx(100.0, rel=1e-9)
+    assert score > score_opportunity(_opp(net_spread=100.0, detected_ms_ago=1.0), _NOW)
 
 
 def test_score_optimal_qty_zero_uses_liquidity_1():

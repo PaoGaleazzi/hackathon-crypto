@@ -7,6 +7,7 @@ from itertools import permutations
 
 import data.bbo_state as bbo_state_module
 from core.fees import calculate_net_spread
+from core.liquidity_health import get_liquidity_monitor
 from models.market import BBO, Exchange, Opportunity
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ def scan_for_opportunities(bbo_state: dict[Exchange, BBO]) -> list[Opportunity]:
 
     opportunities: list[Opportunity] = []
     now = datetime.now(timezone.utc)
+    monitor = get_liquidity_monitor()
 
     for bbo_buy, bbo_sell in permutations(bbo_state.values(), 2):
         if bbo_buy.ask >= bbo_sell.bid:
@@ -39,6 +41,8 @@ def scan_for_opportunities(bbo_state: dict[Exchange, BBO]) -> list[Opportunity]:
         if net_spread <= 0:
             continue
 
+        degraded = not monitor.is_healthy(bbo_buy.exchange) or not monitor.is_healthy(bbo_sell.exchange)
+
         opportunities.append(
             Opportunity(
                 buy_exchange=bbo_buy.exchange,
@@ -52,6 +56,7 @@ def scan_for_opportunities(bbo_state: dict[Exchange, BBO]) -> list[Opportunity]:
                 detected_at=now,
                 available_qty=available_qty,
                 optimal_qty=available_qty,
+                degraded_liquidity=degraded,
             )
         )
 

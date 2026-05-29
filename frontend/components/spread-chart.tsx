@@ -278,9 +278,28 @@ export function SpreadChart({ spreadData, pnlData }: SpreadChartProps) {
   return (
     <div className="space-y-4">
       <div>
-        <p className="text-xs font-medium uppercase tracking-wide text-gray-500 mb-2">
-          Spread BTC: Binance vs Kraken
-        </p>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+            Spread BTC: Binance vs Kraken
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs bg-black/40 backdrop-blur-sm border border-white/5">
+              <span className="w-4 h-px bg-yellow-400 inline-block flex-shrink-0" />
+              <span className="text-gray-400 whitespace-nowrap">μ (media del spread)</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs bg-black/40 backdrop-blur-sm border border-white/5">
+              <span className="inline-block w-4 flex-shrink-0 border-t-2 border-dotted border-blue-400" />
+              <span className="text-gray-400 whitespace-nowrap">±2σ (banda estadística)</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs bg-black/40 backdrop-blur-sm border border-white/5">
+              <span className="inline-flex gap-0.5">
+                <span className="w-2 h-3 rounded-sm bg-emerald-500 inline-block" />
+                <span className="w-2 h-3 rounded-sm bg-red-500 inline-block" />
+              </span>
+              <span className="text-gray-400 whitespace-nowrap">Spread actual</span>
+            </span>
+          </div>
+        </div>
         <div ref={spreadContainerRef} className="w-full" style={{ height: '280px' }} />
       </div>
       <div>

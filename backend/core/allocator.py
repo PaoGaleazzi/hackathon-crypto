@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import cvxpy as cp
 import numpy as np
 
-from core.fill_probability import DEFAULT_TAU_MS, expected_profit
+from core.fill_probability import DEFAULT_TAU_MS, expected_profit, fill_probability
 from core.triangular import TriangularOpportunity
 from models.market import Exchange, Opportunity
 from models.trade import WalletBalance
@@ -114,7 +114,7 @@ class AllocationInputs:
     opportunities: list           # source objects (Opportunity | TriangularOpportunity)
     kinds: list[str]              # "spatial" | "triangular", parallel to opportunities
     expected_returns: np.ndarray  # r_i, net profit per unit capital
-    cov_matrix: np.ndarray        # diagonal, σ_i² = r_i²
+    cov_matrix: np.ndarray        # diagonal, σ_i² = r_i² / P_fill_i
     wallet_caps: dict[str, float]
     wallet_of: list[str]
     max_per_opp: np.ndarray
@@ -137,15 +137,18 @@ def build_allocation_inputs(
       - triangular:  net_profit_pct / 100   (fees-only; the fixed withdrawal is a
                      non-linear charge, kept on the opportunity, not in r)
 
-    Covariance is diagonal with the agreed proxy σ_i² = r_i². Because the interior
-    optimum is x* = 1/(2λ·r_i), wider spreads receive LESS capital — the model
-    diversifies away from fat (often stale) spreads instead of dumping into one.
-    A stale spatial opportunity gets a near-zero (or negative) r_i and is starved.
+    Covariance is diagonal with the proxy σ_i² = r_i² / P_fill_i. The 1/P_fill
+    factor inflates the perceived risk of stale opportunities, so they are
+    penalized TWICE: lower expected return (via E[profit]) AND higher variance.
+    Because the interior optimum is x* = r_i/(2λ·σ_i²) = P_fill·/(2λ·r_i), a stale
+    spatial opportunity is starved on both the mean and the risk term. Triangular
+    legs have no latency-decay model, so P_fill = 1 (σ_i² = r_i²).
     """
     _now = now if now is not None else datetime.now(timezone.utc)
     opportunities: list = []
     kinds: list[str] = []
     returns: list[float] = []
+    variances: list[float] = []
     wallet_of: list[str] = []
     max_per_opp: list[float] = []
 
@@ -153,9 +156,13 @@ def build_allocation_inputs(
         capital_basis = opp.available_qty * opp.buy_ask
         if capital_basis <= 0:
             continue
+        latency_ms = max(0.0, (_now - opp.detected_at).total_seconds() * 1000.0)
+        p_fill = fill_probability(latency_ms, tau_ms)
+        r_i = expected_profit(opp, _now, tau_ms=tau_ms) / capital_basis
         opportunities.append(opp)
         kinds.append("spatial")
-        returns.append(expected_profit(opp, _now, tau_ms=tau_ms) / capital_basis)
+        returns.append(r_i)
+        variances.append(r_i**2 / p_fill)
         wallet_of.append(opp.buy_exchange.value)
         max_per_opp.append(capital_basis)
 
@@ -163,14 +170,16 @@ def build_allocation_inputs(
         buy_leg = opp.legs[0]
         if buy_leg.exchange is None:
             continue
+        r_i = opp.net_profit_pct / 100.0
         opportunities.append(opp)
         kinds.append("triangular")
-        returns.append(opp.net_profit_pct / 100.0)
+        returns.append(r_i)
+        variances.append(r_i**2)
         wallet_of.append(buy_leg.exchange.value)
         max_per_opp.append(opp.notional)
 
     returns_arr = np.array(returns, dtype=float)
-    cov = np.diag(returns_arr ** 2) if returns_arr.size else np.zeros((0, 0))
+    cov = np.diag(np.array(variances, dtype=float)) if variances else np.zeros((0, 0))
     wallet_caps = {ex.value: wb.usdt for ex, wb in wallets.items()}
 
     return AllocationInputs(

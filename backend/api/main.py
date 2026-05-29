@@ -421,6 +421,7 @@ async def lifespan(app: FastAPI):
     initialize_schema()
     tasks = [
         asyncio.create_task(binance.run(), name="binance-ws"),
+        asyncio.create_task(binance.run_depth(), name="binance-depth"),
         asyncio.create_task(kraken.run(), name="kraken-ws"),
         asyncio.create_task(okx.run(), name="okx-ws"),
         asyncio.create_task(coinbase.run(), name="coinbase-ws"),

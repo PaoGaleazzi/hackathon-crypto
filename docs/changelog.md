@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-05-29 (E[profit] → allocator)
+- feat(allocator): `build_allocation_inputs` usa `expected_profit(opp, now)` como
+  expected_return de los legs espaciales (r_i = E[profit]/capital_basis), ya no
+  `net_spread` bruto. El QP ahora reparte capital ponderando por probabilidad de fill:
+  una oportunidad stale obtiene r_i ≈ 0 (o negativo) y queda starved (x_i=0 con x≥0).
+  Nuevos params `now`/`tau_ms` (default `now=utcnow`, `tau=DEFAULT_TAU_MS`).
+- test: 3 sanity tests (r_i = E[profit]/capital, fresh > stale con mismo spread,
+  stale con E[profit]<0 → r_i<0). 44/44 verdes.
+- NOTE: scorer.py NO tenía cambios de la instancia 1 (latency buffer); su trabajo vive
+  en `core/risk_buffer.py` (gate Almgren-Chriss autónomo). Sin conflicto, sin reconciliar.
+
 ## 2026-05-29 (liquidity health monitor)
 - feat(liquidity_health): `core/liquidity_health.py`. Detector de fragmentación de order
   book inspirado en econofísica. `compute_fragmentation_score(levels, top_n=10)` — O(N).

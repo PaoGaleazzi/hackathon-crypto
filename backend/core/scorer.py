@@ -5,6 +5,11 @@ from datetime import datetime, timezone
 from core.fill_probability import DEFAULT_TAU_MS, expected_profit
 from models.market import Opportunity
 
+# Score multiplier applied when either leg's exchange has DEGRADED liquidity.
+# Reflects higher slippage risk from fragmented books: wider effective spreads
+# and more price impact than the model can see from BBO alone.
+DEGRADED_LIQUIDITY_PENALTY = 0.5
+
 
 def score_opportunity(
     opportunity: Opportunity, now: datetime, tau_ms: float = DEFAULT_TAU_MS
@@ -13,8 +18,10 @@ def score_opportunity(
     Composite score for priority queue ordering. Higher = better.
 
     Ranks by latency-adjusted expected profit (E[profit]), not gross profit:
-    the fill-probability decay penalizes stale opportunities, and the liquidity
-    score discounts opportunities we cannot fill at their optimal size.
+    the fill-probability decay penalizes stale opportunities, the liquidity
+    score discounts opportunities we cannot fill at their optimal size, and
+    the degraded-liquidity penalty reduces the score when either leg's exchange
+    has a fragmented order book.
     """
     e_profit = expected_profit(opportunity, now, tau_ms=tau_ms)
     liquidity_score = (
@@ -22,7 +29,10 @@ def score_opportunity(
         if opportunity.optimal_qty > 0
         else 1.0
     )
-    return e_profit * liquidity_score
+    score = e_profit * liquidity_score
+    if opportunity.degraded_liquidity:
+        score *= DEGRADED_LIQUIDITY_PENALTY
+    return score
 
 
 def rank_opportunities(
