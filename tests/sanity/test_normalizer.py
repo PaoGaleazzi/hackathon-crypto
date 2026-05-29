@@ -100,8 +100,8 @@ def test_normalize_kraken_bbo_returns_none_on_missing_field():
 def _coinbase_ticker(
     best_bid: str = "70000.01",
     best_ask: str = "70001.50",
-    best_bid_size: str = "0.521",
-    best_ask_size: str = "1.234",
+    best_bid_quantity: str = "0.521",
+    best_ask_quantity: str = "1.234",
 ) -> dict:
     return {
         "channel": "ticker",
@@ -117,8 +117,8 @@ def _coinbase_ticker(
                         "product_id": "BTC-USD",
                         "best_bid": best_bid,
                         "best_ask": best_ask,
-                        "best_bid_size": best_bid_size,
-                        "best_ask_size": best_ask_size,
+                        "best_bid_quantity": best_bid_quantity,
+                        "best_ask_quantity": best_ask_quantity,
                     }
                 ],
             }
