@@ -26,6 +26,7 @@ export interface Opportunity {
   optimal_qty: number
   detected_at: string
   status: OpportunityStatus
+  degraded_liquidity?: boolean
 }
 
 export interface Trade {

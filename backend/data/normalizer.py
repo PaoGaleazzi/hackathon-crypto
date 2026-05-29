@@ -63,6 +63,59 @@ def normalize_binance_depth(
     return bids, asks
 
 
+def normalize_kraken_depth(
+    raw: dict,
+    asks_book: dict[float, float],
+    bids_book: dict[float, float],
+) -> list[OrderBookLevel] | None:
+    """Apply a Kraken v2 book snapshot or update to in-memory ask/bid dicts.
+
+    Returns the current best 10 asks (ascending by price) as OrderBookLevel list,
+    or None if the message is not a book channel message.
+
+    asks_book and bids_book are mutated in place; callers should clear them on
+    reconnect to avoid stale state from a prior connection.
+    """
+    if raw.get("channel") != "book":
+        return None
+    msg_type = raw.get("type")
+    if msg_type not in ("snapshot", "update"):
+        return None
+
+    try:
+        data = raw["data"][0]
+    except (KeyError, IndexError, TypeError) as exc:
+        logger.warning("Kraken depth: missing data field: %s", exc)
+        return None
+
+    if msg_type == "snapshot":
+        asks_book.clear()
+        bids_book.clear()
+
+    try:
+        for level in data.get("asks", []):
+            price, qty = float(level["price"]), float(level["qty"])
+            if qty <= 0:
+                asks_book.pop(price, None)
+            else:
+                asks_book[price] = qty
+        for level in data.get("bids", []):
+            price, qty = float(level["price"]), float(level["qty"])
+            if qty <= 0:
+                bids_book.pop(price, None)
+            else:
+                bids_book[price] = qty
+    except (KeyError, ValueError, TypeError) as exc:
+        logger.warning("Kraken depth: parse error %s — raw: %s", exc, raw)
+        return None
+
+    if not asks_book:
+        return None
+
+    top_asks = sorted(asks_book.items())[:10]
+    return [OrderBookLevel(price=p, qty=q) for p, q in top_asks]
+
+
 def normalize_kraken_bbo(raw: dict, received_at: datetime) -> BBO | None:
     """Parse Kraken v2 ticker WS message into BBO. Discards heartbeats and system messages."""
     if raw.get("channel") != "ticker":

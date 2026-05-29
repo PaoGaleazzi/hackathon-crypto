@@ -4,7 +4,9 @@ import asyncio
 
 from fastapi import APIRouter
 
+from core.liquidity_health import get_liquidity_monitor
 from db.connection import get_connection
+from models.market import Exchange
 
 router = APIRouter(tags=["opportunities"])
 
@@ -24,6 +26,16 @@ async def list_opportunities() -> list[dict]:
             ORDER BY detected_at DESC
             LIMIT 50
         """).fetchall()
-        return [dict(zip(_COLS, row)) for row in rows]
+        monitor = get_liquidity_monitor()
+        result = []
+        for row in rows:
+            d = dict(zip(_COLS, row))
+            buy_ex = Exchange(d["buy_exchange"])
+            sell_ex = Exchange(d["sell_exchange"])
+            d["degraded_liquidity"] = (
+                not monitor.is_healthy(buy_ex) or not monitor.is_healthy(sell_ex)
+            )
+            result.append(d)
+        return result
 
     return await asyncio.to_thread(_query)

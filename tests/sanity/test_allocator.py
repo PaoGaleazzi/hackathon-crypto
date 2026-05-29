@@ -161,7 +161,7 @@ def test_optimize_allocation_raises_on_missing_wallet_cap():
 
 def test_build_allocation_inputs_spatial_return_and_variance():
     # net_spread 100 over capital 100_000 → r = 0.001, σ² = r² = 1e-6.
-    inputs = build_allocation_inputs([_spatial_opp(net_spread=100.0)], [], _wallets())
+    inputs = build_allocation_inputs([_spatial_opp(net_spread=100.0)], [], _wallets(), now=_NOW)
 
     assert inputs.kinds == ["spatial"]
     assert inputs.expected_returns[0] == pytest.approx(0.001, rel=1e-9)
@@ -171,7 +171,7 @@ def test_build_allocation_inputs_spatial_return_and_variance():
 
 
 def test_build_allocation_inputs_diagonal_variance_is_return_squared():
-    inputs = build_allocation_inputs([_spatial_opp(net_spread=250.0)], [], _wallets())
+    inputs = build_allocation_inputs([_spatial_opp(net_spread=250.0)], [], _wallets(), now=_NOW)
 
     r = inputs.expected_returns[0]
     assert inputs.cov_matrix[0, 0] == pytest.approx(r ** 2, rel=1e-12)
@@ -185,7 +185,7 @@ def test_build_allocation_inputs_combines_spatial_and_triangular():
     tri = detect_triangular(state, stablecoin_cost=0.0)
     assert tri  # precondition: a triangular opp exists
 
-    inputs = build_allocation_inputs([_spatial_opp()], tri, _wallets())
+    inputs = build_allocation_inputs([_spatial_opp()], tri, _wallets(), now=_NOW)
 
     assert inputs.kinds == ["spatial", "triangular"]
     # Triangular BUY leg is on Binance → draws from the Binance wallet.
@@ -194,7 +194,7 @@ def test_build_allocation_inputs_combines_spatial_and_triangular():
 
 
 def test_build_allocation_inputs_wallet_caps_from_balances():
-    inputs = build_allocation_inputs([_spatial_opp()], [], _wallets(usdt=7_500.0))
+    inputs = build_allocation_inputs([_spatial_opp()], [], _wallets(usdt=7_500.0), now=_NOW)
 
     assert inputs.wallet_caps[Exchange.KRAKEN.value] == pytest.approx(7_500.0)
 
@@ -203,7 +203,7 @@ def test_build_inputs_then_optimize_respects_wallet_cap():
     # Two spatial opps on the same wallet (Kraken), cap 1_000 USDT. Total
     # allocation must not exceed the cap.
     opps = [_spatial_opp(net_spread=100.0), _spatial_opp(net_spread=200.0)]
-    inputs = build_allocation_inputs(opps, [], _wallets(usdt=1_000.0))
+    inputs = build_allocation_inputs(opps, [], _wallets(usdt=1_000.0), now=_NOW)
     result = optimize_allocation(
         inputs.expected_returns, inputs.cov_matrix, inputs.wallet_caps,
         inputs.wallet_of, inputs.max_per_opp, risk_aversion=1.0,

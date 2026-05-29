@@ -137,12 +137,14 @@ def build_allocation_inputs(
       - triangular:  net_profit_pct / 100   (fees-only; the fixed withdrawal is a
                      non-linear charge, kept on the opportunity, not in r)
 
-    Covariance is diagonal with the proxy σ_i² = r_i² / P_fill_i. The 1/P_fill
-    factor inflates the perceived risk of stale opportunities, so they are
-    penalized TWICE: lower expected return (via E[profit]) AND higher variance.
+    Covariance is diagonal with the proxy σ_i² = r_i² / max(P_fill_i, 1e-9). The
+    1/P_fill factor inflates the perceived risk of stale opportunities, so they
+    are penalized TWICE: lower expected return (via E[profit]) AND higher variance.
     Because the interior optimum is x* = r_i/(2λ·σ_i²) = P_fill·/(2λ·r_i), a stale
-    spatial opportunity is starved on both the mean and the risk term. Triangular
-    legs have no latency-decay model, so P_fill = 1 (σ_i² = r_i²).
+    spatial opportunity is starved on both the mean and the risk term. The 1e-9
+    floor caps the variance blow-up when P_fill underflows to 0 at high latency,
+    avoiding a divide-by-zero. Triangular legs have no latency-decay model, so
+    P_fill = 1 (σ_i² = r_i²).
     """
     _now = now if now is not None else datetime.now(timezone.utc)
     opportunities: list = []
@@ -162,7 +164,7 @@ def build_allocation_inputs(
         opportunities.append(opp)
         kinds.append("spatial")
         returns.append(r_i)
-        variances.append(r_i**2 / p_fill)
+        variances.append(r_i**2 / max(p_fill, 1e-9))
         wallet_of.append(opp.buy_exchange.value)
         max_per_opp.append(capital_basis)
 

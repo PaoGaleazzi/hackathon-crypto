@@ -1,5 +1,53 @@
 # Changelog
 
+## 2026-05-29 (variance inflation + rebalancer wiring)
+- feat(allocator): la diagonal de la covarianza ahora es `σ_i² = r_i² / P_fill_i`
+  (antes `r_i²`). El factor 1/P_fill infla el riesgo percibido de opps stale, que ya
+  pagaban menor retorno vía `expected_profit` → penalización DOBLE (menor media Y mayor
+  varianza). El óptimo interior pasa a `x* = P_fill·/(2λ·r_i)`, starveando spreads viejos
+  por ambos términos. Floor `max(P_fill, 1e-9)` evita divide-by-zero cuando P_fill hace
+  underflow a 0.0 con latencia alta. Triangular sin modelo de decay → P_fill=1.
+- feat(pipeline): rebalanceo wireado al hot path. Cada `_REBALANCE_EVERY_N_TRADES=25`
+  trades EXECUTED se planea un `plan_rebalance` hacia un target de split parejo
+  (`_even_split_targets`: total de cada asset ÷ n wallets), corrido off-loop vía
+  `asyncio.to_thread` (el MILP es CPU-bound). El plan se broadcasta `{"type":"rebalance"}`
+  como advisory — la sim NO ejecuta las transferencias (evita race con el hot path y
+  respeta el diseño planner del módulo). `btc_price` = mid medio cross-exchange.
+- test: 5 sanity tests de varianza/retorno (`σ_i²=r_i²/P_fill`, stale más riesgosa que
+  fresh por |retorno|). 46/46 verdes.
+- NOTE: instancia 3 (`core/rebalancer.py`) ya estaba terminada y autónoma; solo la conecté
+  al pipeline. Su fix paralelo de `test_allocator.py` (pasar `now`) ya estaba aplicado.
+
+## 2026-05-29 (rebalancer)
+- feat(rebalancer): `core/rebalancer.py` — `plan_rebalance(wallets, targets, btc_price)`
+  resuelve el rebalanceo de wallets como **fixed-charge min-cost flow**. Nodos =
+  (exchange, asset); edges = transferencias same-asset con su withdrawal fee FIJA por
+  transferencia. Objetivo: minimizar Σ fee(source)·y_e (y_e binaria "ruta usada");
+  constraint: cada wallet final dentro de ±`band` del target. Decompone por asset
+  (BTC/USDT), devuelve `RebalancePlan` (transfers, total_cost_usd, status OK/BALANCED/
+  INFEASIBLE). NOTE: usa `scipy.optimize.milp`, NO linprog/min_cost_flow — las fees son
+  fijas por transferencia (fixed-charge), que un LP per-unit no modela (un fee plano de
+  ~$1 de USDT tratado por-unidad daría costo absurdo). Flujos conservan el asset; el fee
+  se cuenta como costo USD aparte. Llamada periódica, no por tick. Sanity tests en
+  `tests/sanity/test_rebalancer.py` (8 casos: rebalanceo conocido 0.5 BTC=$50, sin acción
+  dentro de banda, fuente más barata Kraken<Gemini, infeasible por sumas, USDT flat,
+  multi-asset, validaciones).
+- fix(test): `test_allocator.py` adapter tests pasan `now=_NOW` — el refactor en paralelo
+  de `build_allocation_inputs` (retorno espacial ponderado por fill-probability vía
+  `expected_profit`) volvía la oportunidad "vieja" sin `now`; con `now=detected_at` el
+  p_fill=1 recupera `r=net_spread/capital`.
+
+## 2026-05-29 (liquidity health pipeline integration)
+- feat(binance): stream `@depth10@100ms` en `run_depth()`. Parsea top-10 asks vía
+  `normalize_binance_depth` y alimenta el monitor cada 100ms. Registrado en lifespan
+  como task `"binance-depth"`.
+- feat(scanner): consulta `get_liquidity_monitor().is_healthy()` para buy y sell exchange.
+  Si alguno DEGRADED → `Opportunity.degraded_liquidity=True`. No se descarta.
+- feat(scorer): `DEGRADED_LIQUIDITY_PENALTY=0.5`. Score final ×0.5 cuando
+  `opportunity.degraded_liquidity`. Refleja slippage latente que BBO no captura.
+- refactor(models): `Opportunity.degraded_liquidity: bool = False` (retro-compatible).
+- 44/44 tests verdes.
+
 ## 2026-05-29 (E[profit] → allocator)
 - feat(allocator): `build_allocation_inputs` usa `expected_profit(opp, now)` como
   expected_return de los legs espaciales (r_i = E[profit]/capital_basis), ya no

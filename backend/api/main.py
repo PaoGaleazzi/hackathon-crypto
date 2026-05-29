@@ -25,6 +25,7 @@ from core.allocator import (
 from core.circuit_breaker import get_circuit_breaker
 from core.executor import build_rejected_trade, simulate_execution
 from core.fees import OrderSide, calculate_fee, estimate_slippage
+from core.rebalancer import RebalancePlan, plan_rebalance
 from core.risk_buffer import K_DEFAULT_95, passes_latency_buffer
 from core.stat_arb import get_stat_arb_detector, signal_to_dict
 from core.triangular import detect_triangular, set_latest_opportunities, triangular_to_dict
@@ -139,6 +140,53 @@ _TRIANGULAR_BROADCAST_INTERVAL_S = 0.5
 # guard between detection and execution. 1.645 ≈ 95% one-sided normal quantile.
 _LATENCY_BUFFER_K = K_DEFAULT_95
 
+# Wallet rebalancing: arb cycles buy BTC on one venue and sell on another, so
+# inventory drifts off an even split over time. Every N executed trades we plan a
+# fixed-charge min-cost flow back toward balance and broadcast it (advisory — the
+# sim does not auto-execute transfers). The MILP is CPU-bound, so it runs off the
+# event loop via asyncio.to_thread; not a hot-path concern.
+_REBALANCE_EVERY_N_TRADES = 25
+_REBALANCE_BAND = 0.1
+
+
+def _even_split_targets(
+    wallets: dict[Exchange, WalletBalance],
+) -> dict[str, dict[Exchange, float]]:
+    """Target inventory = each asset's total spread evenly across all wallets."""
+    exchanges = list(wallets)
+    n = len(exchanges)
+    total_btc = sum(w.btc for w in wallets.values())
+    total_usdt = sum(w.usdt for w in wallets.values())
+    return {
+        "BTC": {ex: total_btc / n for ex in exchanges},
+        "USDT": {ex: total_usdt / n for ex in exchanges},
+    }
+
+
+def _representative_btc_price(bbo_state: dict[Exchange, BBO]) -> float:
+    """Mean cross-exchange mid, used to price BTC withdrawal fees in the rebalancer."""
+    mids = [(b.bid + b.ask) / 2.0 for b in bbo_state.values()]
+    return sum(mids) / len(mids)
+
+
+def _rebalance_to_dict(plan: RebalancePlan) -> dict:
+    """JSON-serializable view for the `rebalance` WS broadcast."""
+    return {
+        "status": plan.status,
+        "total_cost_usd": plan.total_cost_usd,
+        "n_transfers": len(plan.transfers),
+        "transfers": [
+            {
+                "asset": t.asset,
+                "from": t.from_exchange.value,
+                "to": t.to_exchange.value,
+                "amount": t.amount,
+                "fee_usd": t.fee_usd,
+            }
+            for t in plan.transfers
+        ],
+    }
+
 
 def _ws_to_decision_ms(
     trigger_bbo: BBO | None,
@@ -192,6 +240,7 @@ async def _pipeline_loop() -> None:
     update_event = bbo_state_module.get_update_event()
     last_stat_arb_mono = 0.0
     last_triangular_mono = 0.0
+    trades_since_rebalance = 0
 
     while True:
         try:
@@ -297,6 +346,8 @@ async def _pipeline_loop() -> None:
                     ))
 
                 _cb.record_trade(trade, now=decision_at)
+                if trade.status == "EXECUTED":
+                    trades_since_rebalance += 1
                 await _ws_manager.broadcast(json.dumps(
                     {"type": "trade", "data": trade.model_dump(mode="json")}
                 ))
@@ -304,6 +355,26 @@ async def _pipeline_loop() -> None:
             if _cb.state != prev_state:
                 cb_payload = json.dumps({"type": "circuit_breaker", "data": _cb.as_dict(now=decision_at)})
                 await _ws_manager.broadcast(cb_payload)
+
+            # Plan wallet rebalancing every N executed trades. CPU-bound MILP runs
+            # off the event loop; the plan is broadcast as advisory (not executed).
+            if trades_since_rebalance >= _REBALANCE_EVERY_N_TRADES:
+                trades_since_rebalance = 0
+                plan = await asyncio.to_thread(
+                    plan_rebalance,
+                    _wallets,
+                    _even_split_targets(_wallets),
+                    _representative_btc_price(bbo_state),
+                    _REBALANCE_BAND,
+                )
+                if plan.status == "OK":
+                    logger.info(
+                        "REBALANCE %d transfers | cost=$%.2f",
+                        len(plan.transfers), plan.total_cost_usd,
+                    )
+                    await _ws_manager.broadcast(json.dumps(
+                        {"type": "rebalance", "data": _rebalance_to_dict(plan)}
+                    ))
 
         except asyncio.CancelledError:
             logger.info("Pipeline stopped")
@@ -423,6 +494,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(binance.run(), name="binance-ws"),
         asyncio.create_task(binance.run_depth(), name="binance-depth"),
         asyncio.create_task(kraken.run(), name="kraken-ws"),
+        asyncio.create_task(kraken.run_depth(), name="kraken-depth"),
         asyncio.create_task(okx.run(), name="okx-ws"),
         asyncio.create_task(coinbase.run(), name="coinbase-ws"),
         asyncio.create_task(bybit.run(), name="bybit-ws"),

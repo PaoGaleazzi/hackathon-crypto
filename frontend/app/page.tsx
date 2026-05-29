@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from '@/components/sidebar'
 import { PriceTicker } from '@/components/price-ticker'
 import { MetricCards } from '@/components/metric-cards'
@@ -10,6 +10,7 @@ import { TradesTable } from '@/components/trades-table'
 import { ZscorePanel } from '@/components/zscore-panel'
 import { TriangularPanel } from '@/components/triangular-panel'
 import { GrossNetPanel } from '@/components/gross-net-panel'
+import { RebalanceStatus } from '@/components/rebalance-status'
 import { CircuitBreakerPanel } from '@/components/circuit-breaker-panel'
 import { WalletBalances } from '@/components/wallet-balances'
 import { LatencyWaterfall } from '@/components/latency-waterfall'
@@ -26,6 +27,39 @@ export default function Page() {
   const triangularOpps = useTriangular()
   const [activeView, setActiveView] = useState('dashboard')
   const [cbOverride, setCbOverride] = useState<'OPEN' | 'CLOSED' | null>(null)
+  const [presentationMode, setPresentationMode] = useState(false)
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'p' && e.key !== 'P') return
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      setPresentationMode(prev => !prev)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Track opps/min: record arrival time each time ws.opportunities[0] changes
+  const oppArrivalsRef = useRef<number[]>([])
+  const prevFirstIdRef = useRef<string | undefined>(undefined)
+  const [oppsPerMin, setOppsPerMin] = useState(0)
+
+  const firstOppId = ws.opportunities[0]?.id
+  useEffect(() => {
+    if (firstOppId && firstOppId !== prevFirstIdRef.current) {
+      prevFirstIdRef.current = firstOppId
+      oppArrivalsRef.current.push(Date.now())
+    }
+  }, [firstOppId])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const cutoff = Date.now() - 60_000
+      oppArrivalsRef.current = oppArrivalsRef.current.filter(t => t >= cutoff)
+      setOppsPerMin(oppArrivalsRef.current.length)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
 
   // Priority: WS live data > REST polled data > mock fallback
   const opportunities =
@@ -65,12 +99,14 @@ export default function Page() {
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: '#0a0e1a' }}>
-      <Sidebar
-        activeView={activeView}
-        onNavigate={setActiveView}
-        circuitBreaker={cbState}
-        botActive={metrics.bot_active}
-      />
+      {!presentationMode && (
+        <Sidebar
+          activeView={activeView}
+          onNavigate={setActiveView}
+          circuitBreaker={cbState}
+          botActive={metrics.bot_active}
+        />
+      )}
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         <PriceTicker
@@ -79,11 +115,38 @@ export default function Page() {
           priceHistory={ws.priceHistory}
           latestLatencyMs={ws.latestLatencyMs}
           connected={ws.connected}
+          oppsPerMin={oppsPerMin}
+          presentationMode={presentationMode}
+          onTogglePresentation={() => setPresentationMode(prev => !prev)}
         />
 
         <main className="flex-1 overflow-y-auto p-6">
+          {/* Presentation mode — clean focused layout */}
+          {presentationMode && (
+            <div className="space-y-6">
+              <MetricCards metrics={metrics} large />
+
+              <div
+                className="rounded-xl border p-4"
+                style={{ background: '#111827', borderColor: '#1f2937' }}
+              >
+                <SpreadChart spreadData={spreadData} pnlData={pnlSeries} />
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <ZscorePanel data={ws.zScore} history={ws.zScoreHistory} />
+                <LatencyWaterfall
+                  stages={rest.latencyStages}
+                  p50_ms={rest.latencyP50Ms}
+                  p95_ms={rest.latencyP95Ms}
+                  sampleCount={rest.latencySampleCount}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Dashboard view */}
-          {activeView === 'dashboard' && (
+          {!presentationMode && activeView === 'dashboard' && (
             <div className="space-y-6">
               <MetricCards metrics={metrics} />
 
@@ -114,11 +177,14 @@ export default function Page() {
                 </h3>
                 <WalletBalances trades={trades} />
               </div>
+
+              {/* Rebalance status */}
+              <RebalanceStatus trades={trades} />
             </div>
           )}
 
           {/* Opportunities view */}
-          {activeView === 'opportunities' && (
+          {!presentationMode && activeView === 'opportunities' && (
             <div className="space-y-4">
               <h2 className="text-lg font-semibold text-white">Opportunities</h2>
               <OpportunitiesTable opportunities={opportunities} />
@@ -133,7 +199,7 @@ export default function Page() {
           )}
 
           {/* Trades view */}
-          {activeView === 'trades' && (
+          {!presentationMode && activeView === 'trades' && (
             <div className="space-y-4">
               <h2 className="text-lg font-semibold text-white">Executed Trades</h2>
               <TradesTable trades={trades} />
@@ -141,7 +207,7 @@ export default function Page() {
           )}
 
           {/* Analytics view */}
-          {activeView === 'analytics' && (
+          {!presentationMode && activeView === 'analytics' && (
             <div className="space-y-6">
               <h2 className="text-lg font-semibold text-white">Analytics</h2>
               <LatencyWaterfall
@@ -155,7 +221,7 @@ export default function Page() {
           )}
 
           {/* Settings view */}
-          {activeView === 'settings' && (
+          {!presentationMode && activeView === 'settings' && (
             <div className="space-y-4">
               <h2 className="text-lg font-semibold text-white">Configuration</h2>
               <div

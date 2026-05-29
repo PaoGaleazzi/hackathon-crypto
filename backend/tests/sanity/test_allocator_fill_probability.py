@@ -4,8 +4,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import math
+
 from core.allocator import build_allocation_inputs
-from core.fill_probability import expected_profit
+from core.fill_probability import expected_profit, fill_probability
 from models.market import Exchange, Opportunity
 from models.trade import WalletBalance
 
@@ -57,6 +59,34 @@ def test_fresh_spatial_gets_higher_return_than_stale_same_spread():
     inputs = build_allocation_inputs([fresh, stale], [], _wallets(), now=now)
 
     assert inputs.expected_returns[0] > inputs.expected_returns[1]
+
+
+def test_variance_equals_return_squared_over_fill_probability():
+    # σ_i² = r_i² / P_fill. At latency == tau, P_fill = 1/e, so variance = r_i²·e.
+    now = datetime(2026, 5, 29, 12, 0, 0, tzinfo=timezone.utc)
+    opp = _make_opportunity(now - timedelta(milliseconds=50.0), net_spread=100.0)
+    capital_basis = opp.available_qty * opp.buy_ask
+
+    inputs = build_allocation_inputs([opp], [], _wallets(), now=now, tau_ms=50.0)
+
+    r_i = inputs.expected_returns[0]
+    p_fill = fill_probability(50.0, tau_ms=50.0)
+    assert inputs.cov_matrix[0, 0] == pytest.approx(r_i**2 / p_fill, rel=1e-9)
+    assert inputs.cov_matrix[0, 0] == pytest.approx(r_i**2 * math.e, rel=1e-9)
+
+
+def test_stale_opp_has_inflated_variance_vs_fresh_same_return_magnitude():
+    # The 1/P_fill factor makes a stale opp riskier per unit of |return| than a
+    # fresh one — variance/return² is larger for the stale leg.
+    now = datetime(2026, 5, 29, 12, 0, 0, tzinfo=timezone.utc)
+    fresh = _make_opportunity(now - timedelta(milliseconds=5.0), net_spread=100.0)
+    stale = _make_opportunity(now - timedelta(milliseconds=200.0), net_spread=100.0)
+
+    inputs = build_allocation_inputs([fresh, stale], [], _wallets(), now=now)
+
+    fresh_ratio = inputs.cov_matrix[0, 0] / inputs.expected_returns[0] ** 2
+    stale_ratio = inputs.cov_matrix[1, 1] / inputs.expected_returns[1] ** 2
+    assert stale_ratio > fresh_ratio
 
 
 def test_stale_spatial_yields_negative_return_when_penalty_dominates():
