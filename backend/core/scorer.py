@@ -10,6 +10,12 @@ from models.market import Opportunity
 # and more price impact than the model can see from BBO alone.
 DEGRADED_LIQUIDITY_PENALTY = 0.5
 
+# Score multiplier applied when the micro-price does NOT confirm the spread,
+# i.e. short-term order-book pressure on at least one leg is eroding it
+# (see scanner.evaluate_microprice_signal). Same magnitude as the liquidity
+# penalty: a discount, not a discard — the spread may still hold.
+MICROPRICE_PENALTY = 0.5
+
 
 def score_opportunity(
     opportunity: Opportunity, now: datetime, tau_ms: float = DEFAULT_TAU_MS
@@ -19,9 +25,10 @@ def score_opportunity(
 
     Ranks by latency-adjusted expected profit (E[profit]), not gross profit:
     the fill-probability decay penalizes stale opportunities, the liquidity
-    score discounts opportunities we cannot fill at their optimal size, and
-    the degraded-liquidity penalty reduces the score when either leg's exchange
-    has a fragmented order book.
+    score discounts opportunities we cannot fill at their optimal size, the
+    degraded-liquidity penalty reduces the score when either leg's exchange
+    has a fragmented order book, and the micro-price penalty reduces it when
+    short-term book pressure is eroding the spread.
     """
     e_profit = expected_profit(opportunity, now, tau_ms=tau_ms)
     liquidity_score = (
@@ -32,6 +39,8 @@ def score_opportunity(
     score = e_profit * liquidity_score
     if opportunity.degraded_liquidity:
         score *= DEGRADED_LIQUIDITY_PENALTY
+    if not opportunity.microprice_confirms:
+        score *= MICROPRICE_PENALTY
     return score
 
 

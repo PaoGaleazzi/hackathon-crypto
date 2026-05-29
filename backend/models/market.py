@@ -88,3 +88,11 @@ class Opportunity(BaseModel):
     # The scorer applies a penalty but does not discard the opportunity —
     # thin markets can still be profitable, just riskier.
     degraded_liquidity: bool = False
+    # Stoikov micro-price of each leg's exchange (imbalance-weighted fair value).
+    # None until the scanner stamps them.
+    microprice_buy: float | None = None
+    microprice_sell: float | None = None
+    # True when neither leg's short-term order-book pressure threatens the
+    # spread (see scanner.evaluate_microprice_signal). Defaults True so a
+    # missing signal never penalizes — same optimistic stance as degraded_liquidity.
+    microprice_confirms: bool = True

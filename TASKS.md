@@ -19,12 +19,12 @@
 ## 🟡 Backend pendiente
 - [ ] Consolidar tests — mover backend/tests/sanity/ a tests/sanity/
 - [ ] Bybit depth — solo data/adapters/bybit.py
-- [ ] Bitstamp depth — solo data/adapters/bitstamp.py  
+- [x] Bitstamp depth — `run_depth()` + `normalize_bitstamp_depth`, task `bitstamp-depth`. Monitor cubre los 6 exchanges. 249 tests verdes.
 - [ ] Stress test WebSocket local: 5 conexiones simultáneas
 - [ ] Verificar que /api/status refleja todos los exchanges correctamente
 
 ## 🟢 Frontend pendiente
-- [ ] System health panel — components/system-health.tsx
+- [x] System health panel — `components/system-health-panel.tsx` + `useSystemHealth` (poll /api/status 5s). Muestra WS LIVE/OFFLINE + liquidity HEALTHY/DEGRADED/no-depth por exchange, uptime, trades, depth feeds, latencia p50. Completado a los 7 exchanges. Montado en dashboard. NOTE: `/api/status` devuelve `uptime_s=0` hardcoded → campo Uptime muestra "—" hasta wirear el start-time en backend.
 - [ ] Verificar mobile responsive en todos los panels
 - [ ] Screenshot del dashboard para el README
 

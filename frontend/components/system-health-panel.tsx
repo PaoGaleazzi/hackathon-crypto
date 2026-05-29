@@ -13,6 +13,9 @@ const EXCHANGE_LABELS: Record<string, string> = {
   kraken:   'Kraken',
   coinbase: 'Coinbase',
   okx:      'OKX',
+  bybit:    'Bybit',
+  bitstamp: 'Bitstamp',
+  gemini:   'Gemini',
 }
 
 const LIQ_COLORS: Record<string, { text: string; dot: string }> = {

@@ -4,7 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from core.scorer import rank_opportunities, score_opportunity
+from core.scorer import (
+    DEGRADED_LIQUIDITY_PENALTY,
+    MICROPRICE_PENALTY,
+    rank_opportunities,
+    score_opportunity,
+)
 from models.market import Exchange, Opportunity
 
 _NOW = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
@@ -81,6 +86,28 @@ def test_score_optimal_qty_zero_uses_liquidity_1():
     opp = _opp(available_qty=0.5, optimal_qty=0.0)
     score = score_opportunity(opp, _NOW)
     assert score == pytest.approx(score_opportunity(_opp(available_qty=0.5, optimal_qty=0.5), _NOW))
+
+
+# ── micro-price penalty ───────────────────────────────────────────────────────
+
+def test_score_microprice_confirmed_has_no_penalty():
+    # Default opp has microprice_confirms=True → score unchanged by the penalty.
+    confirmed = _opp(net_spread=100.0)
+    denied = confirmed.model_copy(update={"microprice_confirms": False})
+    assert score_opportunity(denied, _NOW) == pytest.approx(
+        score_opportunity(confirmed, _NOW) * MICROPRICE_PENALTY
+    )
+
+
+def test_score_microprice_penalty_stacks_with_degraded_liquidity():
+    # Both penalties multiply: 0.5 · 0.5 = 0.25 of the clean score.
+    clean = _opp(net_spread=100.0)
+    both = clean.model_copy(
+        update={"microprice_confirms": False, "degraded_liquidity": True}
+    )
+    assert score_opportunity(both, _NOW) == pytest.approx(
+        score_opportunity(clean, _NOW) * MICROPRICE_PENALTY * DEGRADED_LIQUIDITY_PENALTY
+    )
 
 
 # ── rank_opportunities ────────────────────────────────────────────────────────

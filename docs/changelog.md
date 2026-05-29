@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-05-29 (Micro-price — señal de calidad de oportunidad)
+- feat(core): `microprice.py` — estimador de micro-price de Stoikov (mid ponderado por
+  imbalance del book), `microprice_adjustment` (micro−mid, signo = presión direccional)
+  y `MicropriceEstimator` (histórico rodante por exchange/símbolo + `trend`). Módulo puro.
+- feat(scanner): por cada oportunidad detectada se calcula el micro-price de ambos legs
+  (`evaluate_microprice_signal`) y se estampa en `Opportunity`: `microprice_buy`,
+  `microprice_sell`, `microprice_confirms`.
+  - Lógica de `microprice_confirms`: como el micro-price está acotado dentro del [bid,ask]
+    de su propio exchange, comparar niveles entre exchanges es degenerado (siempre confirma
+    porque buy_ask < sell_bid). La única señal no trivial es la *dirección* de presión por
+    leg = signo de (micro−mid). Confirma sólo si ninguna pierna erosiona el spread:
+    `micro_buy ≤ mid_buy` (sin presión compradora que suba el buy_ask) **y**
+    `micro_sell ≥ mid_sell` (sin presión vendedora que baje el sell_bid). Book balanceado
+    es neutral → confirma.
+- feat(scorer): `MICROPRICE_PENALTY = 0.5` aplicado cuando `microprice_confirms=False`
+  (mismo patrón que `degraded_liquidity`; descuento, no descarte — los penalties se multiplican).
+- 280/280 tests verdes (23 nuevos: microprice puro + señal en scanner + penalty en scorer).
+
+## 2026-05-29 (System health panel — 7 exchanges)
+- feat(frontend): `system-health-panel.tsx` + `useSystemHealth` (poll `/api/status` 5s)
+  completados a los 7 exchanges (faltaban bybit/bitstamp/gemini en `KNOWN_EXCHANGES` y
+  en los labels). Muestra por exchange: WS LIVE/OFFLINE y liquidez HEALTHY/DEGRADED/
+  "no depth"; footer con uptime, trades hoy, depth feeds (N/7) y latencia p50. Montado
+  en el dashboard junto a Rebalance Status. `tsc --noEmit` limpio.
+- NOTE: `/api/status` aún devuelve `uptime_s=0` hardcoded (metrics.py:137) → el campo
+  Uptime muestra "—". Pendiente: trackear start-time en el lifespan.
+
+## 2026-05-29 (Bitstamp depth)
+- feat(bitstamp): `run_depth()` reusa la suscripción `order_book_btcusd` (snapshot
+  completo top-100 por mensaje, sin estado incremental). `normalize_bitstamp_depth`
+  filtra qty>0 y retorna los top-10 asks. Conexión separada de `run()` para no
+  bloquear el stream BBO. Registrado en lifespan como `"bitstamp-depth"`. El liquidity
+  monitor cubre ahora los 6 exchanges con depth (Binance/Kraken/OKX/Coinbase/Bybit/Bitstamp).
+- 249/249 tests verdes.
+
+## 2026-05-29 (fix bugs Coinbase)
+- fix(normalizer): `normalize_coinbase_bbo` leía `best_bid_size`/`best_ask_size`, campos
+  que Coinbase Advanced Trade NO manda — el ticker real trae `best_bid_quantity`/
+  `best_ask_quantity`. El parseo fallaba en cada mensaje → BBO de Coinbase nunca actualizaba.
+  Corregido (+ docstring). `test_normalizer.py` actualizado: el fixture codificaba los
+  nombres viejos (testeaba contra el bug, no contra el payload real).
+- fix(coinbase adapter): `run_depth` pasa `max_size=2**23` (8 MiB) a `websockets.connect`.
+  Los snapshots del canal level2 exceden el límite default de 1 MiB → `1009 message too big`
+  + reconexión en loop. Con el límite ampliado el depth conecta y se mantiene.
+- verify(en vivo): backend levantado, `/api/status` muestra `coinbase` en `exchanges_connected`
+  (BBO poblándose), 0 warnings "Coinbase: failed to parse BBO" (antes ~1000), 0 errores
+  `1009 message too big`. 249/249 tests verdes.
+- NOTE: queda un bug ANÁLOGO no tocado en Bybit — `normalize_*` espera `bid1Price`/`ask1Price`
+  pero los tickers `snapshot` de Bybit a veces no los traen (~205 warnings). Fuera de scope.
+
 ## 2026-05-29 (computed_at en WS + stress test)
 - feat(api): el broadcast WS `{"type":"rebalance"}` ahora incluye `computed_at`
   (`_rebalance_to_dict(plan, decision_at)`) — el mismo timestamp que se guarda en cache,

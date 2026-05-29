@@ -505,6 +505,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(bybit.run(), name="bybit-ws"),
         asyncio.create_task(bybit.run_depth(), name="bybit-depth"),
         asyncio.create_task(bitstamp.run(), name="bitstamp-ws"),
+        asyncio.create_task(bitstamp.run_depth(), name="bitstamp-depth"),
         asyncio.create_task(gemini.run(), name="gemini-ws"),
         asyncio.create_task(_pipeline_loop(), name="pipeline"),
     ]

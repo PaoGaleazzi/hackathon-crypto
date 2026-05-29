@@ -19,7 +19,7 @@ export interface SystemHealth {
   loading: boolean
 }
 
-const KNOWN_EXCHANGES = ['binance', 'kraken', 'coinbase', 'okx']
+const KNOWN_EXCHANGES = ['binance', 'kraken', 'coinbase', 'okx', 'bybit', 'bitstamp', 'gemini']
 const BASE = 'http://localhost:8000'
 const POLL_MS = 5_000
 

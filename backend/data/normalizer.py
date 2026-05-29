@@ -510,32 +510,3 @@ def normalize_okx_depth(raw: dict) -> list[OrderBookLevel] | None:
         return None
 
     return sorted(asks, key=lambda l: l.price)
-
-
-def normalize_bitstamp_depth(raw: dict) -> list[OrderBookLevel] | None:
-    """Parse a Bitstamp order_book_btcusd snapshot into a sorted ask list.
-
-    Bitstamp delivers the full top-100 book on every "data" event — no incremental
-    state needed. Each ask is ["price", "qty"], best-first; we keep the top 10 to
-    match the liquidity monitor's window. Subscription confirms
-    (event="bts:subscription_succeeded") are discarded.
-    """
-    if raw.get("event") != "data":
-        return None
-    if raw.get("channel") != "order_book_btcusd":
-        return None
-
-    try:
-        asks = [
-            OrderBookLevel(price=float(level[0]), qty=float(level[1]))
-            for level in raw["data"]["asks"][:10]
-            if float(level[1]) > 0
-        ]
-    except (KeyError, IndexError, ValueError, TypeError) as exc:
-        logger.warning("Bitstamp depth: parse error %s — raw: %s", exc, raw)
-        return None
-
-    if not asks:
-        return None
-
-    return sorted(asks, key=lambda l: l.price)
