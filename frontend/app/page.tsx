@@ -1,26 +1,30 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Header } from '@/components/header'
+import { Sidebar } from '@/components/sidebar'
+import { PriceTicker } from '@/components/price-ticker'
 import { MetricCards } from '@/components/metric-cards'
-import { PnlChart } from '@/components/pnl-chart'
+import { SpreadChart } from '@/components/spread-chart'
 import { OpportunitiesTable } from '@/components/opportunities-table'
 import { TradesTable } from '@/components/trades-table'
 import { ZscorePanel } from '@/components/zscore-panel'
+import { TriangularPanel } from '@/components/triangular-panel'
+import { GrossNetPanel } from '@/components/gross-net-panel'
 import { CircuitBreakerPanel } from '@/components/circuit-breaker-panel'
 import { WalletBalances } from '@/components/wallet-balances'
 import { LatencyWaterfall } from '@/components/latency-waterfall'
-import { METRICS, OPPORTUNITIES, PNL_SERIES, TRADES } from '@/lib/mock-data'
+import { METRICS, OPPORTUNITIES, PNL_SERIES, TRADES, SPREAD_CANDLES } from '@/lib/mock-data'
 import type { Metrics } from '@/lib/mock-data'
-import { Separator } from '@/components/ui/separator'
 import { useArbitrageData } from '@/hooks/useArbitrageData'
 import { useMetrics } from '@/hooks/useMetrics'
+import { useTriangular } from '@/hooks/useTriangular'
+import { Separator } from '@/components/ui/separator'
 
 export default function Page() {
   const ws = useArbitrageData()
   const rest = useMetrics()
-
-  // Live CB state: WS broadcast takes priority over polled REST
+  const triangularOpps = useTriangular()
+  const [activeView, setActiveView] = useState('dashboard')
   const [cbOverride, setCbOverride] = useState<'OPEN' | 'CLOSED' | null>(null)
 
   // Priority: WS live data > REST polled data > mock fallback
@@ -41,95 +45,147 @@ export default function Page() {
   const pnlSeries =
     ws.connected && ws.pnlPoints.length > 0 ? ws.pnlPoints : PNL_SERIES
 
+  const spreadData = ws.spreadCandles.length > 0 ? ws.spreadCandles : SPREAD_CANDLES
+
   const baseMetrics = rest.metrics ?? METRICS
-
-  // CB state: manual override > WS event > REST poll > mock
-  const cbState: Metrics['circuit_breaker'] =
-    cbOverride ?? ws.circuitBreaker ?? baseMetrics.circuit_breaker
-
+  const cbState = cbOverride ?? ws.circuitBreaker ?? baseMetrics.circuit_breaker
   const metrics: Metrics = { ...baseMetrics, circuit_breaker: cbState }
 
-  // Derive latest BTC price per exchange from most recent opportunity involving each exchange
   const btcPrices = useMemo(() => {
     const prices: Record<string, number> = {}
-    // Iterate newest-first so the first hit per exchange wins
     for (const opp of opportunities) {
       const buy = opp.buy_exchange.toLowerCase()
       const sell = opp.sell_exchange.toLowerCase()
       if (!(buy in prices)) prices[buy] = opp.buy_ask
       if (!(sell in prices)) prices[sell] = opp.sell_bid
     }
-    // Real-time WS prices override REST-derived prices
     Object.assign(prices, ws.btcPrices)
     return prices
   }, [opportunities, ws.btcPrices])
 
   return (
-    <div className="flex flex-col min-h-screen">
-      <Header metrics={metrics} latestLatencyMs={ws.latestLatencyMs} btcPrices={btcPrices} />
+    <div className="flex h-screen overflow-hidden" style={{ background: '#0a0e1a' }}>
+      <Sidebar
+        activeView={activeView}
+        onNavigate={setActiveView}
+        circuitBreaker={cbState}
+        botActive={metrics.bot_active}
+      />
 
-      <main className="flex-1 px-4 md:px-8 py-6 space-y-6">
-        <MetricCards metrics={metrics} />
-
-        {/* Pipeline latency breakdown */}
-        <LatencyWaterfall
-          stages={rest.latencyStages}
-          p50_ms={rest.latencyP50Ms}
-          p95_ms={rest.latencyP95Ms}
-          sampleCount={rest.latencySampleCount}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <PriceTicker
+          metrics={metrics}
+          btcPrices={btcPrices}
+          priceHistory={ws.priceHistory}
+          latestLatencyMs={ws.latestLatencyMs}
+          connected={ws.connected}
         />
 
-        {/* P&L chart + Z-score side by side */}
-        <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2">
-            <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
-              Cumulative P&amp;L — last 8 hours
-            </h2>
-            <div className="rounded-lg border border-white/10 bg-gray-900 p-4">
-              <PnlChart data={pnlSeries} />
+        <main className="flex-1 overflow-y-auto p-6">
+          {/* Dashboard view */}
+          {activeView === 'dashboard' && (
+            <div className="space-y-6">
+              <MetricCards metrics={metrics} />
+
+              {/* Spread chart (candlestick + P&L) */}
+              <div
+                className="rounded-xl border p-4"
+                style={{ background: '#111827', borderColor: '#1f2937' }}
+              >
+                <SpreadChart spreadData={spreadData} pnlData={pnlSeries} />
+              </div>
+
+              {/* Z-score + Triangular */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <ZscorePanel data={ws.zScore} history={ws.zScoreHistory} />
+                <TriangularPanel opportunities={triangularOpps} />
+              </div>
+
+              {/* Gross vs Net filter panel */}
+              <GrossNetPanel opportunities={opportunities} />
+
+              {/* Wallets */}
+              <div
+                className="rounded-xl border p-4"
+                style={{ background: '#111827', borderColor: '#1f2937' }}
+              >
+                <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">
+                  Wallet Balances
+                </h3>
+                <WalletBalances trades={trades} />
+              </div>
             </div>
-          </div>
+          )}
 
-          <div>
-            <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
-              Statistical Arbitrage
-            </h2>
-            <ZscorePanel data={ws.zScore} history={ws.zScoreHistory} />
-          </div>
-        </section>
+          {/* Opportunities view */}
+          {activeView === 'opportunities' && (
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold text-white">Opportunities</h2>
+              <OpportunitiesTable opportunities={opportunities} />
+              <Separator className="bg-white/10" />
+              <section>
+                <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
+                  Triangular Arbitrage
+                </h2>
+                <TriangularPanel opportunities={triangularOpps} />
+              </section>
+            </div>
+          )}
 
-        {/* Circuit breaker controls */}
-        <CircuitBreakerPanel
-          state={cbState}
-          onStateChange={setCbOverride}
-        />
+          {/* Trades view */}
+          {activeView === 'trades' && (
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold text-white">Executed Trades</h2>
+              <TradesTable trades={trades} />
+            </div>
+          )}
 
-        {/* Wallet balances */}
-        <section>
-          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
-            Wallet Balances — simulated
-          </h2>
-          <WalletBalances trades={trades} />
-        </section>
+          {/* Analytics view */}
+          {activeView === 'analytics' && (
+            <div className="space-y-6">
+              <h2 className="text-lg font-semibold text-white">Analytics</h2>
+              <LatencyWaterfall
+                stages={rest.latencyStages}
+                p50_ms={rest.latencyP50Ms}
+                p95_ms={rest.latencyP95Ms}
+                sampleCount={rest.latencySampleCount}
+              />
+              <CircuitBreakerPanel state={cbState} onStateChange={setCbOverride} />
+            </div>
+          )}
 
-        <Separator className="bg-white/10" />
-
-        <section>
-          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
-            Opportunities detected — last 20
-          </h2>
-          <OpportunitiesTable opportunities={opportunities} />
-        </section>
-
-        <Separator className="bg-white/10" />
-
-        <section>
-          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
-            Trades executed — last 20
-          </h2>
-          <TradesTable trades={trades} />
-        </section>
-      </main>
+          {/* Settings view */}
+          {activeView === 'settings' && (
+            <div className="space-y-4">
+              <h2 className="text-lg font-semibold text-white">Configuration</h2>
+              <div
+                className="rounded-xl border p-6"
+                style={{ background: '#111827', borderColor: '#1f2937' }}
+              >
+                <dl className="grid grid-cols-2 gap-4">
+                  {(
+                    [
+                      ['Min Profit Threshold', '$1.00 USDT'],
+                      ['Min Fill Ratio', '0.30'],
+                      ['Stale Quote Timeout', '500ms'],
+                      ['CB Loss Threshold', '0.05%'],
+                      ['CB Cooldown', '30s'],
+                      ['Min Trade Size', '0.001 BTC'],
+                      ['Demo Mode', 'Active'],
+                      ['Exchanges', 'Binance, Kraken, Coinbase, OKX'],
+                    ] as [string, string][]
+                  ).map(([k, v]) => (
+                    <div key={k} className="col-span-1">
+                      <dt className="text-xs text-gray-600 uppercase tracking-wide">{k}</dt>
+                      <dd className="text-sm font-mono text-gray-200 mt-0.5">{v}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
     </div>
   )
 }

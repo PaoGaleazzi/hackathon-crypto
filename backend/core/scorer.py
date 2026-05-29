@@ -2,27 +2,33 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from core.fill_probability import DEFAULT_TAU_MS, expected_profit
 from models.market import Opportunity
 
 
-def score_opportunity(opportunity: Opportunity, now: datetime) -> float:
+def score_opportunity(
+    opportunity: Opportunity, now: datetime, tau_ms: float = DEFAULT_TAU_MS
+) -> float:
     """
     Composite score for priority queue ordering. Higher = better.
-    score = (net_spread_pct * available_qty * liquidity_score) / latency_ms
+
+    Ranks by latency-adjusted expected profit (E[profit]), not gross profit:
+    the fill-probability decay penalizes stale opportunities, and the liquidity
+    score discounts opportunities we cannot fill at their optimal size.
     """
-    latency_ms = max(1.0, (now - opportunity.detected_at).total_seconds() * 1000)
-    net_spread_pct = opportunity.net_spread / (opportunity.buy_ask * opportunity.available_qty)
+    e_profit = expected_profit(opportunity, now, tau_ms=tau_ms)
     liquidity_score = (
         min(1.0, opportunity.available_qty / opportunity.optimal_qty)
         if opportunity.optimal_qty > 0
         else 1.0
     )
-    return (net_spread_pct * opportunity.available_qty * liquidity_score) / latency_ms
+    return e_profit * liquidity_score
 
 
 def rank_opportunities(
     opportunities: list[Opportunity],
     now: datetime | None = None,
+    tau_ms: float = DEFAULT_TAU_MS,
 ) -> list[Opportunity]:
     """Return opportunities sorted by score descending, with score field updated."""
     if not opportunities:
@@ -30,7 +36,7 @@ def rank_opportunities(
 
     _now = now if now is not None else datetime.now(timezone.utc)
     scored = [
-        opp.model_copy(update={"score": score_opportunity(opp, _now)})
+        opp.model_copy(update={"score": score_opportunity(opp, _now, tau_ms)})
         for opp in opportunities
     ]
     return sorted(scored, key=lambda o: o.score, reverse=True)

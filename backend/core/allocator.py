@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import cvxpy as cp
 import numpy as np
 
+from core.fill_probability import DEFAULT_TAU_MS, expected_profit
 from core.triangular import TriangularOpportunity
 from models.market import Exchange, Opportunity
 from models.trade import WalletBalance
@@ -122,18 +124,25 @@ def build_allocation_inputs(
     spatial: list[Opportunity],
     triangular: list[TriangularOpportunity],
     wallets: dict[Exchange, WalletBalance],
+    now: datetime | None = None,
+    tau_ms: float = DEFAULT_TAU_MS,
 ) -> AllocationInputs:
     """Assemble optimize_allocation() inputs from live opportunities and balances.
 
     expected_return r_i is the net return per unit capital:
-      - spatial:     net_spread / (available_qty · buy_ask)
+      - spatial:     E[profit](opp, now) / (available_qty · buy_ask), where E[profit]
+                     weights net_spread by the fill probability (exp decay with the
+                     opportunity's age) and subtracts the failure penalty. Capital
+                     is steered by *realizable* edge, not gross spread.
       - triangular:  net_profit_pct / 100   (fees-only; the fixed withdrawal is a
                      non-linear charge, kept on the opportunity, not in r)
 
     Covariance is diagonal with the agreed proxy σ_i² = r_i². Because the interior
     optimum is x* = 1/(2λ·r_i), wider spreads receive LESS capital — the model
     diversifies away from fat (often stale) spreads instead of dumping into one.
+    A stale spatial opportunity gets a near-zero (or negative) r_i and is starved.
     """
+    _now = now if now is not None else datetime.now(timezone.utc)
     opportunities: list = []
     kinds: list[str] = []
     returns: list[float] = []
@@ -146,7 +155,7 @@ def build_allocation_inputs(
             continue
         opportunities.append(opp)
         kinds.append("spatial")
-        returns.append(opp.net_spread / capital_basis)
+        returns.append(expected_profit(opp, _now, tau_ms=tau_ms) / capital_basis)
         wallet_of.append(opp.buy_exchange.value)
         max_per_opp.append(capital_basis)
 

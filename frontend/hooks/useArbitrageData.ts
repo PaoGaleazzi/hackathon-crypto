@@ -94,9 +94,9 @@ export function useArbitrageData(): ArbitrageState {
                 let nextCandles = prev.spreadCandles
                 if (exchanges.has('binance') && exchanges.has('kraken')) {
                   const spread = Math.abs(msg.data.sell_bid - msg.data.buy_ask)
-                  const minuteKey = Math.floor(Date.now() / 60000) * 60
+                  const fiveSecKey = Math.floor(Date.now() / 5000) * 5
                   const last = nextCandles[nextCandles.length - 1]
-                  if (last && last.time === minuteKey) {
+                  if (last && last.time === fiveSecKey) {
                     const updated: SpreadCandle = {
                       ...last,
                       high: Math.max(last.high, spread),
@@ -107,7 +107,7 @@ export function useArbitrageData(): ArbitrageState {
                   } else {
                     nextCandles = [
                       ...nextCandles,
-                      { time: minuteKey, open: spread, high: spread, low: spread, close: spread },
+                      { time: fiveSecKey, open: spread, high: spread, low: spread, close: spread },
                     ].slice(-200)
                   }
                 }

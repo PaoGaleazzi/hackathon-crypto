@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-05-29 (liquidity health monitor)
+- feat(liquidity_health): `core/liquidity_health.py`. Detector de fragmentación de order
+  book inspirado en econofísica. `compute_fragmentation_score(levels, top_n=10)` — O(N).
+  Fórmula: `Σ (rel_gap_i / qty_i) / total_depth`, donde rel_gap_i es el gap normalizado
+  por el mejor precio y qty_i el volumen en el nivel i. Libros sanos ≈ 1e-5; fragmentados
+  ≈ 0.1–10+. `LiquidityHealthMonitor` (singleton) cachea el estado por exchange y expone
+  `is_healthy(exchange)` para que el pipeline evite legs en exchanges DEGRADED.
+- feat(api): `GET /api/status` ahora incluye `liquidity_health` con score, status
+  (HEALTHY/DEGRADED/UNKNOWN), level_count y computed_at por exchange.
+- test: 15 sanity tests — valores conocidos a mano para libro sano (score=3e-5) y
+  fragmentado (score=0.75), invariantes de monotonía, truncación top_n, estado del monitor.
+  41/41 verdes.
+
+## 2026-05-29 (fill-probability model)
+- feat(fill_probability): nuevo `core/fill_probability.py`. Modela que las oportunidades
+  más viejas tienen menor probabilidad de seguir en el book cuando llega nuestra orden.
+  `P_fill(latency) = exp(-latency_ms / tau)`, tau configurable (default 50ms → P_fill=1/e
+  a un tau de antigüedad). `E[profit] = P_fill·net_profit - (1-P_fill)·penalty`, donde la
+  penalty default es el sunk cost de una ejecución fallida (taker fees de ambos legs vía
+  `core/fees`). Oportunidades stale pueden scorear negativo y salir de la cola.
+- refactor(scorer): `score_opportunity` rankea por E[profit] ajustado (× liquidity_score),
+  ya no por profit bruto sobre latencia cruda. `tau_ms` propagado por `rank_opportunities`.
+- test: 8 sanity tests nuevos (decay de P_fill, E[profit] conocido a mano, fresh > stale
+  con mismo spread, penalty = suma de taker fees). 26/26 verdes.
+
+## 2026-05-29 (allocator wiring + frontend)
+- feat(allocator): `build_allocation_inputs(spatial, triangular, wallets)` arma los
+  inputs del QP desde oportunidades vivas. r_i = retorno neto por unidad de capital
+  (spatial: `net_spread/(qty·ask)`; triangular: `net_profit_pct/100`). Σ diagonal con
+  proxy `σ_i² = r_i²` — el óptimo interior `x*=1/(2λr)` da MENOS capital a spreads
+  anchos (típicamente stale), diversificando. `allocation_to_dict` para el broadcast.
+- feat(pipeline): el hot path ya no toma `ranked[0]`. Corre la allocación mean-variance
+  sobre TODAS las oportunidades simultáneas, broadcasta `{"type":"allocation",...}` con
+  la vista de portfolio y ejecuta los legs espaciales con el capital asignado (qty =
+  capital/ask, ≥ min_trade_size). Triangular va solo en la vista (sin executor aún).
+  Se removió `OptimalSizer`/`scorer` del loop.
+- feat(frontend): panel de triángulos. Hook dedicado `useTriangular` (poll `/api/triangular`
+  cada 2s + WS `triangular_opportunity`), `components/triangular-panel.tsx` (tabla:
+  triángulo, buy/sell venue, profit %, net P&L, withdrawal). Montado en dashboard y en
+  la vista Opportunities. Next 16: solo client components/hooks (sin tocar SSR/data-fetch).
+
 ## 2026-05-29 (triangular wiring + allocator)
 - feat(triangular): withdrawal cost en el modelo. `TriangularOpportunity` ahora lleva
   `notional`, `withdrawal_cost` (fee BTC × precio del venue de compra) y `net_profit`

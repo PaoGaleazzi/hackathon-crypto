@@ -23,7 +23,9 @@ from core.allocator import (
     optimize_allocation,
 )
 from core.circuit_breaker import get_circuit_breaker
-from core.executor import simulate_execution
+from core.executor import build_rejected_trade, simulate_execution
+from core.fees import OrderSide, calculate_fee, estimate_slippage
+from core.risk_buffer import K_DEFAULT_95, passes_latency_buffer
 from core.stat_arb import get_stat_arb_detector, signal_to_dict
 from core.triangular import detect_triangular, set_latest_opportunities, triangular_to_dict
 from data.adapters import binance, bitstamp, bybit, coinbase, gemini, kraken, okx
@@ -133,6 +135,53 @@ _STAT_ARB_SAMPLE_INTERVAL_S = 0.1
 # top one is broadcast at most this often to avoid spamming the dashboard.
 _TRIANGULAR_BROADCAST_INTERVAL_S = 0.5
 
+# Latency risk buffer (Almgren-Chriss): protection level for the adverse-move
+# guard between detection and execution. 1.645 ≈ 95% one-sided normal quantile.
+_LATENCY_BUFFER_K = K_DEFAULT_95
+
+
+def _ws_to_decision_ms(
+    trigger_bbo: BBO | None,
+    decision_ns: int,
+    decision_at: datetime,
+) -> float:
+    """ws→decision latency in ms. Prefers the monotonic ns clock, falls back to
+    wall-clock datetimes when the adapter did not stamp ws_received_ns."""
+    if trigger_bbo is None:
+        return 0.0
+    if trigger_bbo.ws_received_ns is not None:
+        return (decision_ns - trigger_bbo.ws_received_ns) / 1e6
+    return (decision_at - trigger_bbo.ws_received_at).total_seconds() * 1000
+
+
+def _spread_sigma(ex_a: Exchange, ex_b: Exchange) -> float:
+    """Short-term spread volatility (USD) for a pair from the stat-arb detector's
+    rolling window. 0.0 when the window has too few samples — the latency buffer
+    then degenerates to the plain net-edge check until the window fills."""
+    stats_ = get_stat_arb_detector().get_stats(ex_a, ex_b)
+    return stats_.std if stats_ is not None else 0.0
+
+
+def _survives_latency_buffer(opp, qty: float, latency_ms: float) -> bool:
+    """Almgren-Chriss gate: gross spread P&L must clear fees + slippage + the
+    latency risk buffer (k·σ·√(latency)·qty)."""
+    sigma = _spread_sigma(opp.buy_exchange, opp.sell_exchange)
+    gross = (opp.sell_bid - opp.buy_ask) * qty
+    fees = (
+        calculate_fee(opp.buy_exchange, qty, opp.buy_ask, OrderSide.TAKER)
+        + calculate_fee(opp.sell_exchange, qty, opp.sell_bid, OrderSide.TAKER)
+    )
+    depth = opp.available_qty
+    slippage = (
+        estimate_slippage(qty, opp.buy_ask, depth)
+        + estimate_slippage(qty, opp.sell_bid, depth)
+        if depth > 0
+        else 0.0
+    )
+    return passes_latency_buffer(
+        gross, fees, slippage, sigma, latency_ms, qty, k=_LATENCY_BUFFER_K
+    )
+
 
 async def _pipeline_loop() -> None:
     """Event-driven hot path: wakes on every BBO update (no fixed poll), then
@@ -208,6 +257,30 @@ async def _pipeline_loop() -> None:
                 if qty < settings.min_trade_size_btc:
                     continue
 
+                # ws→decision latency (monotonic ns; datetime fallback).
+                trigger_bbo = bbo_state.get(source.buy_exchange)
+                latency_ms = _ws_to_decision_ms(trigger_bbo, decision_ns, decision_at)
+
+                # Latency risk buffer (Almgren-Chriss): the price can move
+                # adversely between detection and execution. Reject when the gross
+                # spread doesn't clear fees + slippage + k·σ·√(latency)·qty. This
+                # is a pre-execution skip (like min-fill): broadcast for visibility
+                # but NOT recorded to the circuit breaker, to keep its stale/loss
+                # semantics intact.
+                if not _survives_latency_buffer(source, qty, latency_ms):
+                    rejected = build_rejected_trade(
+                        source, qty, decision_at, "REJECTED_LATENCY_RISK", latency_ms=latency_ms,
+                    )
+                    logger.info(
+                        "TRADE %-26s | %s→%s | qty=%.5f | latency=%.2fms",
+                        rejected.status, source.buy_exchange.value,
+                        source.sell_exchange.value, qty, latency_ms,
+                    )
+                    await _ws_manager.broadcast(json.dumps(
+                        {"type": "trade", "data": rejected.model_dump(mode="json")}
+                    ))
+                    continue
+
                 trade = simulate_execution(source, qty, _wallets, bbo_state, now=decision_at)
                 logger.info(
                     "TRADE %-26s | %s→%s | qty=%.5f | net=$%+.2f",
@@ -215,19 +288,12 @@ async def _pipeline_loop() -> None:
                     trade.qty, trade.net_profit,
                 )
 
-                # Latency is monotonic (ns); datetimes stored only for display.
-                trigger_bbo = bbo_state.get(source.buy_exchange)
+                # Reuse the measured latency for the persisted latency event.
                 if trigger_bbo is not None:
-                    ws_recv = trigger_bbo.ws_received_at
-                    ws_recv_ns = trigger_bbo.ws_received_ns
-                    total_ms = (
-                        (decision_ns - ws_recv_ns) / 1e6
-                        if ws_recv_ns is not None
-                        else (decision_at - ws_recv).total_seconds() * 1000
-                    )
                     asyncio.create_task(asyncio.to_thread(
                         _persist_latency_event,
-                        ws_recv, trigger_bbo.normalized_at, scan_started_at, decision_at, total_ms,
+                        trigger_bbo.ws_received_at, trigger_bbo.normalized_at,
+                        scan_started_at, decision_at, latency_ms,
                     ))
 
                 _cb.record_trade(trade, now=decision_at)

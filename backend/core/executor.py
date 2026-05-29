@@ -230,6 +230,23 @@ def _slippage_usd(
     return buy_slip + sell_slip
 
 
+def build_rejected_trade(
+    opportunity: Opportunity,
+    qty: float,
+    now: datetime,
+    status: TradeStatus,
+    latency_ms: float | None = None,
+) -> Trade:
+    """Public builder for a rejected Trade used by pre-execution pipeline gates
+    (e.g. REJECTED_LATENCY_RISK) that never reach simulate_execution. When
+    latency_ms is given it overrides the detected_at→now estimate with the
+    measured ws→decision latency."""
+    trade = _build_rejected(opportunity, qty, now, status)
+    if latency_ms is not None:
+        trade = trade.model_copy(update={"latency_ms": latency_ms})
+    return trade
+
+
 def _build_rejected(
     opportunity: Opportunity,
     qty: float,

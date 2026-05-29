@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 import data.bbo_state as bbo_state
 from core.circuit_breaker import get_circuit_breaker
+from core.liquidity_health import get_liquidity_monitor
 from db.connection import get_connection
 
 router = APIRouter(tags=["metrics"])
@@ -132,5 +133,6 @@ async def get_status() -> dict:
         "circuit_breaker": cb.state.value,
         "circuit_breaker_detail": cb.as_dict(),
         "exchanges_connected": bbo_state.get_connected(),
+        "liquidity_health": get_liquidity_monitor().as_dict(),
         "uptime_s": 0,
     }
