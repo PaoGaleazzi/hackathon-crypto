@@ -4,6 +4,14 @@ import { type Metrics } from '@/lib/mock-data'
 interface HeaderProps {
   metrics: Metrics
   latestLatencyMs?: number | null
+  btcPrices?: Record<string, number>
+}
+
+const EXCHANGE_LABELS: Record<string, string> = {
+  binance: 'Binance',
+  kraken: 'Kraken',
+  coinbase: 'Coinbase',
+  okx: 'OKX',
 }
 
 function latencyColor(ms: number): string {
@@ -12,7 +20,11 @@ function latencyColor(ms: number): string {
   return 'text-red-400'
 }
 
-export function Header({ metrics, latestLatencyMs }: HeaderProps) {
+function formatPrice(usd: number): string {
+  return usd.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+}
+
+export function Header({ metrics, latestLatencyMs, btcPrices = {} }: HeaderProps) {
   return (
     <header className="bg-gray-900 border-b border-white/10 px-4 md:px-8 py-4">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -20,15 +32,28 @@ export function Header({ metrics, latestLatencyMs }: HeaderProps) {
           <span className="text-xl font-bold tracking-tight text-white">
             BTC Arbitrage Bot
           </span>
-          <div className="flex items-center gap-1.5">
-            {metrics.exchanges_connected.map((exchange) => (
-              <span
-                key={exchange}
-                className="text-xs font-medium px-2 py-0.5 rounded-full bg-white/10 text-gray-300"
-              >
-                {exchange}
-              </span>
-            ))}
+          <div className="flex items-center gap-2">
+            {metrics.exchanges_connected.map((exchange) => {
+              const label = EXCHANGE_LABELS[exchange?.toLowerCase()] ?? exchange
+              const price = btcPrices[exchange?.toLowerCase()]
+              return (
+                <div
+                  key={exchange}
+                  className="flex flex-col items-center px-2.5 py-1 rounded-lg bg-white/10 min-w-[72px]"
+                >
+                  <span className="text-xs font-medium text-gray-300 leading-tight">
+                    {label}
+                  </span>
+                  {price != null ? (
+                    <span className="text-xs font-mono font-semibold text-white leading-tight">
+                      ${formatPrice(price)}
+                    </span>
+                  ) : (
+                    <span className="text-xs font-mono text-gray-600 leading-tight">—</span>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
 

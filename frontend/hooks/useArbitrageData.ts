@@ -10,6 +10,11 @@ export interface ZScoreData {
   timestamp: string
 }
 
+export interface ZScorePoint {
+  time: number
+  z: number
+}
+
 interface ArbitrageState {
   opportunities: Opportunity[]
   trades: Trade[]
@@ -18,6 +23,8 @@ interface ArbitrageState {
   latestLatencyMs: number | null
   zScore: ZScoreData | null
   circuitBreaker: 'OPEN' | 'CLOSED' | null
+  btcPrices: Record<string, number>
+  zScoreHistory: ZScorePoint[]
 }
 
 type WsMessage =
@@ -31,6 +38,7 @@ const WS_URL = 'ws://localhost:8000/ws/live'
 const RECONNECT_DELAY_MS = 3000
 const MAX_ROWS = 20
 const MAX_PNL_POINTS = 200
+const MAX_ZSCORE_HISTORY = 120
 
 export function useArbitrageData(): ArbitrageState {
   const [state, setState] = useState<ArbitrageState>({
@@ -41,6 +49,8 @@ export function useArbitrageData(): ArbitrageState {
     latestLatencyMs: null,
     zScore: null,
     circuitBreaker: null,
+    btcPrices: {},
+    zScoreHistory: [],
   })
   const wsRef = useRef<WebSocket | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -63,11 +73,16 @@ export function useArbitrageData(): ArbitrageState {
           const msg = JSON.parse(event.data) as WsMessage
           setState(prev => {
             switch (msg.type) {
-              case 'opportunity':
+              case 'opportunity': {
+                const prices = { ...prev.btcPrices }
+                prices[msg.data.buy_exchange] = msg.data.buy_ask
+                prices[msg.data.sell_exchange] = msg.data.sell_bid
                 return {
                   ...prev,
                   opportunities: [msg.data, ...prev.opportunities].slice(0, MAX_ROWS),
+                  btcPrices: prices,
                 }
+              }
               case 'trade':
                 return {
                   ...prev,
@@ -80,7 +95,14 @@ export function useArbitrageData(): ArbitrageState {
                   pnlPoints: [...prev.pnlPoints, msg.data].slice(-MAX_PNL_POINTS),
                 }
               case 'z_score':
-                return { ...prev, zScore: msg.data }
+                return {
+                  ...prev,
+                  zScore: msg.data,
+                  zScoreHistory: [
+                    ...prev.zScoreHistory,
+                    { time: Date.now(), z: msg.data.z_score },
+                  ].slice(-MAX_ZSCORE_HISTORY),
+                }
               case 'circuit_breaker':
                 return { ...prev, circuitBreaker: msg.data.state }
               default:

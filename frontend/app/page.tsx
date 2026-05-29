@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Header } from '@/components/header'
 import { MetricCards } from '@/components/metric-cards'
 import { PnlChart } from '@/components/pnl-chart'
@@ -8,6 +8,8 @@ import { OpportunitiesTable } from '@/components/opportunities-table'
 import { TradesTable } from '@/components/trades-table'
 import { ZscorePanel } from '@/components/zscore-panel'
 import { CircuitBreakerPanel } from '@/components/circuit-breaker-panel'
+import { WalletBalances } from '@/components/wallet-balances'
+import { LatencyWaterfall } from '@/components/latency-waterfall'
 import { METRICS, OPPORTUNITIES, PNL_SERIES, TRADES } from '@/lib/mock-data'
 import type { Metrics } from '@/lib/mock-data'
 import { Separator } from '@/components/ui/separator'
@@ -47,12 +49,35 @@ export default function Page() {
 
   const metrics: Metrics = { ...baseMetrics, circuit_breaker: cbState }
 
+  // Derive latest BTC price per exchange from most recent opportunity involving each exchange
+  const btcPrices = useMemo(() => {
+    const prices: Record<string, number> = {}
+    // Iterate newest-first so the first hit per exchange wins
+    for (const opp of opportunities) {
+      const buy = opp.buy_exchange.toLowerCase()
+      const sell = opp.sell_exchange.toLowerCase()
+      if (!(buy in prices)) prices[buy] = opp.buy_ask
+      if (!(sell in prices)) prices[sell] = opp.sell_bid
+    }
+    // Real-time WS prices override REST-derived prices
+    Object.assign(prices, ws.btcPrices)
+    return prices
+  }, [opportunities, ws.btcPrices])
+
   return (
     <div className="flex flex-col min-h-screen">
-      <Header metrics={metrics} latestLatencyMs={ws.latestLatencyMs} />
+      <Header metrics={metrics} latestLatencyMs={ws.latestLatencyMs} btcPrices={btcPrices} />
 
       <main className="flex-1 px-4 md:px-8 py-6 space-y-6">
         <MetricCards metrics={metrics} />
+
+        {/* Pipeline latency breakdown */}
+        <LatencyWaterfall
+          stages={rest.latencyStages}
+          p50_ms={rest.latencyP50Ms}
+          p95_ms={rest.latencyP95Ms}
+          sampleCount={rest.latencySampleCount}
+        />
 
         {/* P&L chart + Z-score side by side */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -69,7 +94,7 @@ export default function Page() {
             <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
               Statistical Arbitrage
             </h2>
-            <ZscorePanel data={ws.zScore} />
+            <ZscorePanel data={ws.zScore} history={ws.zScoreHistory} />
           </div>
         </section>
 
@@ -78,6 +103,14 @@ export default function Page() {
           state={cbState}
           onStateChange={setCbOverride}
         />
+
+        {/* Wallet balances */}
+        <section>
+          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wide mb-3">
+            Wallet Balances — simulated
+          </h2>
+          <WalletBalances trades={trades} />
+        </section>
 
         <Separator className="bg-white/10" />
 

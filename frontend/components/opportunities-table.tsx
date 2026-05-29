@@ -1,3 +1,6 @@
+'use client'
+
+import { useEffect, useState } from 'react'
 import {
   Table,
   TableBody,
@@ -55,7 +58,23 @@ function fmtEx(ex: string): string {
   return EXCHANGE_LABELS[ex?.toLowerCase()] ?? ex
 }
 
+function formatAge(detectedAt: string, now: number): string {
+  const ms = now - new Date(detectedAt).getTime()
+  if (ms < 0) return '0ms'
+  if (ms < 1_000) return `${ms}ms`
+  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`
+  return `${Math.floor(ms / 3_600_000)}h`
+}
+
 export function OpportunitiesTable({ opportunities }: OpportunitiesTableProps) {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(id)
+  }, [])
+
   const unique = Array.from(new Map(opportunities.map(o => [o.id, o])).values())
   const sorted = unique.sort(
     (a, b) => new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime()
@@ -74,6 +93,7 @@ export function OpportunitiesTable({ opportunities }: OpportunitiesTableProps) {
               <TableHead className="text-gray-400 text-xs uppercase tracking-wide">Score</TableHead>
               <TableHead className="text-gray-400 text-xs uppercase tracking-wide text-right">Qty BTC</TableHead>
               <TableHead className="text-gray-400 text-xs uppercase tracking-wide text-right">Time</TableHead>
+              <TableHead className="text-gray-400 text-xs uppercase tracking-wide text-right">Age</TableHead>
               <TableHead className="text-gray-400 text-xs uppercase tracking-wide">Status</TableHead>
             </TableRow>
           </TableHeader>
@@ -121,6 +141,9 @@ export function OpportunitiesTable({ opportunities }: OpportunitiesTableProps) {
                   </TableCell>
                   <TableCell className="text-sm text-right font-mono text-gray-400 whitespace-nowrap">
                     {format(parseISO(opp.detected_at), 'HH:mm:ss')}
+                  </TableCell>
+                  <TableCell className="text-sm text-right font-mono text-gray-500 whitespace-nowrap">
+                    {formatAge(opp.detected_at, now)}
                   </TableCell>
                   <TableCell>
                     <Badge

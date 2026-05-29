@@ -65,6 +65,15 @@ export function PnlChart({ data }: PnlChartProps) {
             })}`,
           minMove: 1,
         },
+        // Force Y-axis to start at 0 so the cumulative nature is visually clear
+        autoscaleInfoProvider: (original: () => { priceRange: { minValue: number; maxValue: number }; margins?: { above: number; below: number } } | null) => {
+          const res = original()
+          if (res === null) return null
+          return {
+            priceRange: { minValue: 0, maxValue: res.priceRange.maxValue },
+            margins: res.margins,
+          }
+        },
       })
 
       chartRef.current = chartInst

@@ -1,10 +1,11 @@
 'use client'
 
-import { type ZScoreData } from '@/hooks/useArbitrageData'
+import { type ZScoreData, type ZScorePoint } from '@/hooks/useArbitrageData'
 import { format, parseISO } from 'date-fns'
 
 interface ZscorePanelProps {
   data: ZScoreData | null
+  history?: ZScorePoint[]
 }
 
 function zscoreColor(z: number): string {
@@ -26,7 +27,80 @@ function zToPercent(z: number): number {
   return Math.round(((Math.max(-3, Math.min(3, z)) + 3) / 6) * 100)
 }
 
-export function ZscorePanel({ data }: ZscorePanelProps) {
+const SVG_W = 220
+const SVG_H = 44
+
+function ZScoreSparkline({ history }: { history: ZScorePoint[] }) {
+  if (history.length < 2) {
+    return (
+      <div className="flex items-center justify-center h-11 text-xs text-gray-600">
+        Accumulating history…
+      </div>
+    )
+  }
+
+  const zValues = history.map(p => p.z)
+  const minZ = Math.min(-3, ...zValues)
+  const maxZ = Math.max(3, ...zValues)
+  const range = maxZ - minZ || 1
+
+  const toX = (i: number) => (i / (history.length - 1)) * SVG_W
+  const toY = (z: number) => SVG_H - ((z - minZ) / range) * SVG_H
+
+  const points = history.map((p, i) => `${toX(i).toFixed(1)},${toY(p.z).toFixed(1)}`).join(' ')
+
+  const zeroY = toY(0)
+  const pos2Y = toY(2)
+  const neg2Y = toY(-2)
+
+  // Gradient fill: split above/below zero
+  const lastZ = history[history.length - 1].z
+  const strokeColor = Math.abs(lastZ) >= 2 ? '#f87171' : Math.abs(lastZ) >= 1 ? '#facc15' : '#4ade80'
+
+  return (
+    <svg
+      width="100%"
+      height={SVG_H}
+      viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+      preserveAspectRatio="none"
+      className="overflow-visible"
+    >
+      {/* ±2σ threshold bands */}
+      {pos2Y >= 0 && pos2Y <= SVG_H && (
+        <line x1="0" y1={pos2Y} x2={SVG_W} y2={pos2Y}
+          stroke="rgba(239,68,68,0.25)" strokeWidth="1" strokeDasharray="3,3" />
+      )}
+      {neg2Y >= 0 && neg2Y <= SVG_H && (
+        <line x1="0" y1={neg2Y} x2={SVG_W} y2={neg2Y}
+          stroke="rgba(239,68,68,0.25)" strokeWidth="1" strokeDasharray="3,3" />
+      )}
+      {/* Zero line */}
+      {zeroY >= 0 && zeroY <= SVG_H && (
+        <line x1="0" y1={zeroY} x2={SVG_W} y2={zeroY}
+          stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+      )}
+      {/* Z-score sparkline */}
+      <polyline
+        points={points}
+        fill="none"
+        stroke={strokeColor}
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      {/* Current value dot */}
+      {history.length >= 1 && (
+        <circle
+          cx={toX(history.length - 1).toFixed(1)}
+          cy={toY(lastZ).toFixed(1)}
+          r="2.5"
+          fill={strokeColor}
+        />
+      )}
+    </svg>
+  )
+}
+
+export function ZscorePanel({ data, history = [] }: ZscorePanelProps) {
   return (
     <div className="rounded-lg border border-white/10 bg-gray-900 p-4 h-full">
       <div className="flex items-center justify-between mb-3">
@@ -85,6 +159,15 @@ export function ZscorePanel({ data }: ZscorePanelProps) {
             <span>0</span>
             <span>+1σ</span>
             <span>+3σ</span>
+          </div>
+
+          {/* Historical sparkline */}
+          <div className="border-t border-white/5 pt-2">
+            <div className="flex justify-between text-xs text-gray-600 mb-1">
+              <span>History ({history.length} pts)</span>
+              <span className="font-mono">±2σ threshold</span>
+            </div>
+            <ZScoreSparkline history={history} />
           </div>
 
           <div className="flex justify-between text-xs text-gray-500 pt-1 border-t border-white/5">

@@ -10,29 +10,26 @@ import orjson
 import websockets
 
 import data.bbo_state as bbo_state
-from data.normalizer import normalize_kraken_bbo
+from data.normalizer import normalize_bybit_bbo
 
 logger = logging.getLogger(__name__)
 
-_URL = "wss://ws.kraken.com/v2"
+_URL = "wss://stream.bybit.com/v5/public/spot"
 _SUBSCRIBE_MSG = json.dumps({
-    "method": "subscribe",
-    "params": {
-        "channel": "ticker",
-        "symbol": ["BTC/USD"],
-    },
+    "op": "subscribe",
+    "args": ["tickers.BTCUSDT"],
 })
 _MAX_BACKOFF_S = 60
 
 
 async def run() -> None:
-    """Connect to Kraken v2 ticker stream and keep BBO state updated."""
+    """Connect to Bybit v5 spot tickers stream and keep BBO state updated."""
     backoff = 1
     while True:
         try:
             async with websockets.connect(_URL) as ws:
                 await ws.send(_SUBSCRIBE_MSG)
-                logger.info("Kraken WS connected and subscribed")
+                logger.info("Bybit WS connected and subscribed")
                 backoff = 1
                 async for raw_msg in ws:
                     received_at = datetime.now(timezone.utc)
@@ -40,17 +37,17 @@ async def run() -> None:
                     try:
                         data = orjson.loads(raw_msg)
                     except orjson.JSONDecodeError:
-                        logger.warning("Kraken: malformed JSON, skipping")
+                        logger.warning("Bybit: malformed JSON, skipping")
                         continue
 
-                    bbo = normalize_kraken_bbo(data, received_at)
+                    bbo = normalize_bybit_bbo(data, received_at)
                     if bbo is not None:
                         bbo_state.update(bbo.model_copy(update={"ws_received_ns": received_ns}))
 
         except asyncio.CancelledError:
-            logger.info("Kraken WS adapter stopped")
+            logger.info("Bybit WS adapter stopped")
             raise
         except Exception as exc:
-            logger.warning("Kraken WS error: %s — reconnecting in %ds", exc, backoff)
+            logger.warning("Bybit WS error: %s — reconnecting in %ds", exc, backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, _MAX_BACKOFF_S)

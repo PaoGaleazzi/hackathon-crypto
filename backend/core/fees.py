@@ -17,15 +17,21 @@ _FEE_RATES: dict[Exchange, dict[OrderSide, float]] = {
     Exchange.KRAKEN:   {OrderSide.MAKER: 0.0016, OrderSide.TAKER: 0.0026},
     Exchange.COINBASE: {OrderSide.MAKER: 0.004,  OrderSide.TAKER: 0.006},
     Exchange.OKX:      {OrderSide.MAKER: 0.0008, OrderSide.TAKER: 0.001},
+    Exchange.BYBIT:    {OrderSide.MAKER: 0.001,  OrderSide.TAKER: 0.001},
+    Exchange.BITSTAMP: {OrderSide.MAKER: 0.003,  OrderSide.TAKER: 0.004},
+    Exchange.GEMINI:   {OrderSide.MAKER: 0.002,  OrderSide.TAKER: 0.004},
 }
 
 # BTC withdrawal fees (network + platform fee) per exchange as of 2026
-# Sources: Binance/Kraken/Coinbase/OKX official fee schedule pages
+# Sources: Binance/Kraken/Coinbase/OKX/Bybit official fee schedule pages
 _WITHDRAWAL_FEES_BTC: dict[Exchange, float] = {
     Exchange.BINANCE:  0.0005,    # ~$50 at $100k/BTC
     Exchange.KRAKEN:   0.00015,   # ~$15 at $100k/BTC
     Exchange.COINBASE: 0.0001,    # ~$10 at $100k/BTC (variable; network fee estimate)
     Exchange.OKX:      0.0004,    # ~$40 at $100k/BTC
+    Exchange.BYBIT:    0.0005,    # ~$50 at $100k/BTC
+    Exchange.BITSTAMP: 0.0003,    # ~$30 at $100k/BTC
+    Exchange.GEMINI:   0.001,     # ~$100 at $100k/BTC
 }
 
 # Typical WebSocket round-trip latency per exchange (milliseconds)
@@ -34,6 +40,9 @@ _LATENCY_MS: dict[Exchange, float] = {
     Exchange.KRAKEN:   50.0,
     Exchange.COINBASE: 30.0,
     Exchange.OKX:      10.0,
+    Exchange.BYBIT:    15.0,
+    Exchange.BITSTAMP: 40.0,
+    Exchange.GEMINI:   35.0,
 }
 
 # BTC annualized realized vol (crypto 24/7, conservative)

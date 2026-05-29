@@ -3,11 +3,24 @@
 import { useEffect, useState } from 'react'
 import type { Exchange, Metrics, Opportunity, Trade } from '@/lib/mock-data'
 
+export interface LatencyStages {
+  parse_p50_ms:    number | null
+  parse_p95_ms:    number | null
+  scan_p50_ms:     number | null
+  scan_p95_ms:     number | null
+  decision_p50_ms: number | null
+  decision_p95_ms: number | null
+}
+
 interface PolledData {
   metrics: Metrics | null
   opportunities: Opportunity[]
   trades: Trade[]
   backendAlive: boolean
+  latencyStages: LatencyStages | null
+  latencySampleCount: number
+  latencyP50Ms: number
+  latencyP95Ms: number
 }
 
 interface StatusResponse {
@@ -21,6 +34,7 @@ interface LatencyResponse {
   p95_ms: number | null
   p99_ms: number | null
   sample_count: number
+  stages?: LatencyStages | null
 }
 
 interface PnlResponse {
@@ -52,6 +66,10 @@ export function useMetrics(): PolledData {
     opportunities: [],
     trades: [],
     backendAlive: false,
+    latencyStages: null,
+    latencySampleCount: 0,
+    latencyP50Ms: 0,
+    latencyP95Ms: 0,
   })
 
   useEffect(() => {
@@ -98,6 +116,10 @@ export function useMetrics(): PolledData {
         opportunities: resolvedOpps,
         trades: resolvedTrades,
         backendAlive: true,
+        latencyStages: latency?.stages ?? null,
+        latencySampleCount: latency?.sample_count ?? 0,
+        latencyP50Ms: latency?.p50_ms ?? 0,
+        latencyP95Ms: latency?.p95_ms ?? 0,
       })
     }
 

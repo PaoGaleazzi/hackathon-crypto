@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+import time
 from datetime import datetime, timezone
 
+import orjson
 import websockets
 
 import data.bbo_state as bbo_state
@@ -26,15 +27,16 @@ async def run() -> None:
                 backoff = 1
                 async for raw_msg in ws:
                     received_at = datetime.now(timezone.utc)
+                    received_ns = time.perf_counter_ns()
                     try:
-                        data = json.loads(raw_msg)
-                    except json.JSONDecodeError:
+                        data = orjson.loads(raw_msg)
+                    except orjson.JSONDecodeError:
                         logger.warning("Binance: malformed JSON, skipping")
                         continue
 
                     bbo = normalize_binance_bbo(data, received_at)
                     if bbo is not None:
-                        bbo_state.update(bbo)
+                        bbo_state.update(bbo.model_copy(update={"ws_received_ns": received_ns}))
 
         except asyncio.CancelledError:
             logger.info("Binance WS adapter stopped")

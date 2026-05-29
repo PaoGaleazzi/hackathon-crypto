@@ -11,6 +11,9 @@ class Exchange(str, Enum):
     KRAKEN = "kraken"
     COINBASE = "coinbase"
     OKX = "okx"
+    BYBIT = "bybit"
+    BITSTAMP = "bitstamp"
+    GEMINI = "gemini"
 
 
 class BBO(BaseModel):
@@ -21,6 +24,10 @@ class BBO(BaseModel):
     ask_qty: float
     ws_received_at: datetime
     normalized_at: datetime | None = None
+    # Monotonic clock (time.perf_counter_ns) captured at WS receive. Used to
+    # measure ws→decision latency without wall-clock/NTP skew. None until an
+    # adapter stamps it; latency falls back to ws_received_at when absent.
+    ws_received_ns: int | None = None
 
     model_config = {"frozen": True}
 

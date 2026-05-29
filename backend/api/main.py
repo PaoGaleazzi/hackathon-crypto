@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import logging
 import random
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -18,7 +20,7 @@ from core.circuit_breaker import get_circuit_breaker
 from core.executor import simulate_execution
 from core.sizer import InsufficientBalanceError, OptimalSizer
 from core.stat_arb import get_stat_arb_detector, signal_to_dict
-from data.adapters import binance, kraken, okx
+from data.adapters import binance, bitstamp, bybit, coinbase, gemini, kraken, okx
 import data.bbo_state as bbo_state_module
 from db.connection import close_connection, get_connection
 from db.schema import initialize_schema
@@ -57,12 +59,14 @@ class ConnectionManager:
         self._clients.discard(ws)
 
     async def broadcast(self, data: str) -> None:
-        dead: set[WebSocket] = set()
-        for client in self._clients:
-            try:
-                await client.send_text(data)
-            except Exception:
-                dead.add(client)
+        clients = list(self._clients)
+        if not clients:
+            return
+        results = await asyncio.gather(
+            *(c.send_text(data) for c in clients),
+            return_exceptions=True,
+        )
+        dead = {c for c, r in zip(clients, results) if isinstance(r, Exception)}
         self._clients -= dead
 
 
@@ -112,20 +116,35 @@ async def _update_stat_arb(bbo_state: dict[Exchange, BBO], now: datetime) -> Non
 
 # ── pipeline loop ─────────────────────────────────────────────────────────────
 
+# Stat-arb is market intelligence, not hot path. Throttle its sampling to the
+# prior cadence so the OU window's "ticks" keep their meaning and entry-signal
+# broadcasts don't amplify when the loop wakes on every BBO update.
+_STAT_ARB_SAMPLE_INTERVAL_S = 0.1
+
+
 async def _pipeline_loop() -> None:
-    """scanner → scorer → sizer → executor, every 100ms."""
+    """Event-driven hot path: wakes on every BBO update (no fixed poll), then
+    scanner → scorer → sizer → executor. ws→decision latency is measured with a
+    monotonic clock (perf_counter_ns), immune to wall-clock/NTP skew.
+    """
     _cb = get_circuit_breaker()
+    update_event = bbo_state_module.get_update_event()
+    last_stat_arb_mono = 0.0
 
     while True:
         try:
-            await asyncio.sleep(0.1)
+            await update_event.wait()
+            update_event.clear()
             now = datetime.now(timezone.utc)
 
             bbo_state = bbo_state_module.get_all()
             if len(bbo_state) < 2:
                 continue
 
-            await _update_stat_arb(bbo_state, now)
+            mono = time.perf_counter()
+            if mono - last_stat_arb_mono >= _STAT_ARB_SAMPLE_INTERVAL_S:
+                last_stat_arb_mono = mono
+                await _update_stat_arb(bbo_state, now)
 
             if not _cb.allow_trade(now=now):
                 continue
@@ -149,6 +168,7 @@ async def _pipeline_loop() -> None:
                 continue
 
             decision_at = datetime.now(timezone.utc)
+            decision_ns = time.perf_counter_ns()
             trade = simulate_execution(top, qty, _wallets, bbo_state, now=decision_at)
             logger.info(
                 "TRADE %-26s | %s→%s | qty=%.5f | net=$%+.2f",
@@ -156,17 +176,23 @@ async def _pipeline_loop() -> None:
                 trade.qty, trade.net_profit,
             )
 
-            # Persist latency event (fire-and-forget, does not block hot path)
+            # Persist latency event (fire-and-forget, does not block hot path).
+            # Latency is monotonic (ns); datetimes are stored only for display.
             trigger_bbo = bbo_state.get(top.buy_exchange)
             if trigger_bbo is not None:
                 ws_recv = trigger_bbo.ws_received_at
                 normalized = trigger_bbo.normalized_at
-                total_ms = (decision_at - ws_recv).total_seconds() * 1000
+                ws_recv_ns = trigger_bbo.ws_received_ns
+                total_ms = (
+                    (decision_ns - ws_recv_ns) / 1e6
+                    if ws_recv_ns is not None
+                    else (decision_at - ws_recv).total_seconds() * 1000
+                )
                 asyncio.create_task(asyncio.to_thread(
                     _persist_latency_event,
                     ws_recv, normalized, scan_started_at, decision_at, total_ms,
                 ))
-                logger.debug("Latency: %.2fms (ws→decision)", total_ms)
+                logger.debug("Latency: %.3fms (ws→decision, monotonic)", total_ms)
 
             prev_state = _cb.state
             _cb.record_trade(trade, now=decision_at)
@@ -296,10 +322,21 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(binance.run(), name="binance-ws"),
         asyncio.create_task(kraken.run(), name="kraken-ws"),
         asyncio.create_task(okx.run(), name="okx-ws"),
+        asyncio.create_task(coinbase.run(), name="coinbase-ws"),
+        asyncio.create_task(bybit.run(), name="bybit-ws"),
+        asyncio.create_task(bitstamp.run(), name="bitstamp-ws"),
+        asyncio.create_task(gemini.run(), name="gemini-ws"),
         asyncio.create_task(_pipeline_loop(), name="pipeline"),
     ]
     if settings.demo_mode:
         tasks.append(asyncio.create_task(_demo_loop(), name="demo"))
+
+    # Move all startup objects into a permanent GC generation: collect once to
+    # clear startup garbage, then freeze the survivors so the hot path's GC
+    # cycles only scan new allocations — no long pauses on long-lived state.
+    gc.collect()
+    gc.freeze()
+
     logger.info("WS adapters + pipeline started (demo_mode=%s)", settings.demo_mode)
     yield
     for task in tasks:
