@@ -5,6 +5,10 @@ from dataclasses import dataclass
 import cvxpy as cp
 import numpy as np
 
+from core.triangular import TriangularOpportunity
+from models.market import Exchange, Opportunity
+from models.trade import WalletBalance
+
 DEFAULT_RISK_AVERSION = 1.0  # λ in the mean-variance objective
 
 
@@ -98,3 +102,99 @@ def optimize_allocation(
         objective_value=objective_value,
         status=problem.status,
     )
+
+
+# ── adapter: opportunities → optimizer inputs ────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class AllocationInputs:
+    opportunities: list           # source objects (Opportunity | TriangularOpportunity)
+    kinds: list[str]              # "spatial" | "triangular", parallel to opportunities
+    expected_returns: np.ndarray  # r_i, net profit per unit capital
+    cov_matrix: np.ndarray        # diagonal, σ_i² = r_i²
+    wallet_caps: dict[str, float]
+    wallet_of: list[str]
+    max_per_opp: np.ndarray
+
+
+def build_allocation_inputs(
+    spatial: list[Opportunity],
+    triangular: list[TriangularOpportunity],
+    wallets: dict[Exchange, WalletBalance],
+) -> AllocationInputs:
+    """Assemble optimize_allocation() inputs from live opportunities and balances.
+
+    expected_return r_i is the net return per unit capital:
+      - spatial:     net_spread / (available_qty · buy_ask)
+      - triangular:  net_profit_pct / 100   (fees-only; the fixed withdrawal is a
+                     non-linear charge, kept on the opportunity, not in r)
+
+    Covariance is diagonal with the agreed proxy σ_i² = r_i². Because the interior
+    optimum is x* = 1/(2λ·r_i), wider spreads receive LESS capital — the model
+    diversifies away from fat (often stale) spreads instead of dumping into one.
+    """
+    opportunities: list = []
+    kinds: list[str] = []
+    returns: list[float] = []
+    wallet_of: list[str] = []
+    max_per_opp: list[float] = []
+
+    for opp in spatial:
+        capital_basis = opp.available_qty * opp.buy_ask
+        if capital_basis <= 0:
+            continue
+        opportunities.append(opp)
+        kinds.append("spatial")
+        returns.append(opp.net_spread / capital_basis)
+        wallet_of.append(opp.buy_exchange.value)
+        max_per_opp.append(capital_basis)
+
+    for opp in triangular:
+        buy_leg = opp.legs[0]
+        if buy_leg.exchange is None:
+            continue
+        opportunities.append(opp)
+        kinds.append("triangular")
+        returns.append(opp.net_profit_pct / 100.0)
+        wallet_of.append(buy_leg.exchange.value)
+        max_per_opp.append(opp.notional)
+
+    returns_arr = np.array(returns, dtype=float)
+    cov = np.diag(returns_arr ** 2) if returns_arr.size else np.zeros((0, 0))
+    wallet_caps = {ex.value: wb.usdt for ex, wb in wallets.items()}
+
+    return AllocationInputs(
+        opportunities=opportunities,
+        kinds=kinds,
+        expected_returns=returns_arr,
+        cov_matrix=cov,
+        wallet_caps=wallet_caps,
+        wallet_of=wallet_of,
+        max_per_opp=np.array(max_per_opp, dtype=float),
+    )
+
+
+def allocation_to_dict(inputs: AllocationInputs, result: AllocationResult) -> dict:
+    """JSON-serializable portfolio view for the `allocation` WS broadcast."""
+    items = []
+    for i, (opp, kind) in enumerate(zip(inputs.opportunities, inputs.kinds)):
+        label = (
+            opp.path if kind == "triangular"
+            else f"{opp.buy_exchange.value}→{opp.sell_exchange.value}"
+        )
+        items.append({
+            "kind": kind,
+            "label": label,
+            "wallet": inputs.wallet_of[i],
+            "expected_return": float(inputs.expected_returns[i]),
+            "allocation": float(result.allocations[i]),
+            "max_allocation": float(inputs.max_per_opp[i]),
+        })
+    return {
+        "expected_profit": result.expected_profit,
+        "expected_variance": result.expected_variance,
+        "objective_value": result.objective_value,
+        "n_opportunities": len(items),
+        "items": items,
+    }

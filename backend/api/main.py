@@ -15,10 +15,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import circuit_breaker, health, metrics, opportunities, trades, triangular
 from config import settings
-from core import scanner, scorer
+from core import scanner
+from core.allocator import (
+    DEFAULT_RISK_AVERSION,
+    allocation_to_dict,
+    build_allocation_inputs,
+    optimize_allocation,
+)
 from core.circuit_breaker import get_circuit_breaker
 from core.executor import simulate_execution
-from core.sizer import InsufficientBalanceError, OptimalSizer
 from core.stat_arb import get_stat_arb_detector, signal_to_dict
 from core.triangular import detect_triangular, set_latest_opportunities, triangular_to_dict
 from data.adapters import binance, bitstamp, bybit, coinbase, gemini, kraken, okx
@@ -72,7 +77,9 @@ class ConnectionManager:
 
 
 _ws_manager = ConnectionManager()
-_sizer = OptimalSizer()
+
+# λ for the mean-variance allocator. Higher = more risk-averse / diversified.
+_RISK_AVERSION = DEFAULT_RISK_AVERSION
 
 # ── statistical arbitrage monitoring ──────────────────────────────────────────
 
@@ -129,8 +136,8 @@ _TRIANGULAR_BROADCAST_INTERVAL_S = 0.5
 
 async def _pipeline_loop() -> None:
     """Event-driven hot path: wakes on every BBO update (no fixed poll), then
-    scanner → scorer → sizer → executor. ws→decision latency is measured with a
-    monotonic clock (perf_counter_ns), immune to wall-clock/NTP skew.
+    scan (spatial + triangular) → mean-variance allocator → executor. ws→decision
+    latency is measured with a monotonic clock (perf_counter_ns), immune to skew.
     """
     _cb = get_circuit_breaker()
     update_event = bbo_state_module.get_update_event()
@@ -169,54 +176,64 @@ async def _pipeline_loop() -> None:
                     {"type": "triangular_opportunity", "data": triangular_to_dict(triangular_opps[0])}
                 ))
 
-            if not opportunities:
+            if not opportunities and not triangular_opps:
                 continue
 
-            ranked = scorer.rank_opportunities(opportunities, now=scan_started_at)
-            top = ranked[0]
-
-            balance_usdt = _wallets[top.buy_exchange].usdt
-            try:
-                qty = _sizer.compute_optimal_qty(top, balance_usdt)
-            except InsufficientBalanceError:
-                logger.warning("Insufficient balance on %s", top.buy_exchange.value)
-                continue
-
-            if qty <= 0:
-                continue
+            # Mean-variance allocation across ALL simultaneous opportunities
+            # (spatial + triangular) instead of greedily taking the single best.
+            inputs = build_allocation_inputs(opportunities, triangular_opps, _wallets)
+            allocation = optimize_allocation(
+                inputs.expected_returns, inputs.cov_matrix, inputs.wallet_caps,
+                inputs.wallet_of, inputs.max_per_opp, risk_aversion=_RISK_AVERSION,
+            )
+            await _ws_manager.broadcast(json.dumps(
+                {"type": "allocation", "data": allocation_to_dict(inputs, allocation)}
+            ))
 
             decision_at = datetime.now(timezone.utc)
             decision_ns = time.perf_counter_ns()
-            trade = simulate_execution(top, qty, _wallets, bbo_state, now=decision_at)
-            logger.info(
-                "TRADE %-26s | %s→%s | qty=%.5f | net=$%+.2f",
-                trade.status, trade.buy_exchange.value, trade.sell_exchange.value,
-                trade.qty, trade.net_profit,
-            )
-
-            # Persist latency event (fire-and-forget, does not block hot path).
-            # Latency is monotonic (ns); datetimes are stored only for display.
-            trigger_bbo = bbo_state.get(top.buy_exchange)
-            if trigger_bbo is not None:
-                ws_recv = trigger_bbo.ws_received_at
-                normalized = trigger_bbo.normalized_at
-                ws_recv_ns = trigger_bbo.ws_received_ns
-                total_ms = (
-                    (decision_ns - ws_recv_ns) / 1e6
-                    if ws_recv_ns is not None
-                    else (decision_at - ws_recv).total_seconds() * 1000
-                )
-                asyncio.create_task(asyncio.to_thread(
-                    _persist_latency_event,
-                    ws_recv, normalized, scan_started_at, decision_at, total_ms,
-                ))
-                logger.debug("Latency: %.3fms (ws→decision, monotonic)", total_ms)
-
             prev_state = _cb.state
-            _cb.record_trade(trade, now=decision_at)
 
-            payload = json.dumps({"type": "trade", "data": trade.model_dump(mode="json")})
-            await _ws_manager.broadcast(payload)
+            # Execute the spatial legs that received capital, sized by allocation.
+            # Triangular legs have no executor yet — their allocation is shown in
+            # the portfolio view only.
+            for source, kind, capital in zip(
+                inputs.opportunities, inputs.kinds, allocation.allocations
+            ):
+                if kind != "spatial" or capital <= 0.0:
+                    continue
+                if not _cb.allow_trade(now=decision_at):
+                    break
+                qty = capital / source.buy_ask
+                if qty < settings.min_trade_size_btc:
+                    continue
+
+                trade = simulate_execution(source, qty, _wallets, bbo_state, now=decision_at)
+                logger.info(
+                    "TRADE %-26s | %s→%s | qty=%.5f | net=$%+.2f",
+                    trade.status, trade.buy_exchange.value, trade.sell_exchange.value,
+                    trade.qty, trade.net_profit,
+                )
+
+                # Latency is monotonic (ns); datetimes stored only for display.
+                trigger_bbo = bbo_state.get(source.buy_exchange)
+                if trigger_bbo is not None:
+                    ws_recv = trigger_bbo.ws_received_at
+                    ws_recv_ns = trigger_bbo.ws_received_ns
+                    total_ms = (
+                        (decision_ns - ws_recv_ns) / 1e6
+                        if ws_recv_ns is not None
+                        else (decision_at - ws_recv).total_seconds() * 1000
+                    )
+                    asyncio.create_task(asyncio.to_thread(
+                        _persist_latency_event,
+                        ws_recv, trigger_bbo.normalized_at, scan_started_at, decision_at, total_ms,
+                    ))
+
+                _cb.record_trade(trade, now=decision_at)
+                await _ws_manager.broadcast(json.dumps(
+                    {"type": "trade", "data": trade.model_dump(mode="json")}
+                ))
 
             if _cb.state != prev_state:
                 cb_payload = json.dumps({"type": "circuit_breaker", "data": _cb.as_dict(now=decision_at)})

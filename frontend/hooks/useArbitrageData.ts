@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Opportunity, PnlPoint, Trade } from '@/lib/mock-data'
+import type { Opportunity, PnlPoint, Trade, SpreadCandle } from '@/lib/mock-data'
 
 export interface ZScoreData {
   pair: string
@@ -25,6 +25,8 @@ interface ArbitrageState {
   circuitBreaker: 'OPEN' | 'CLOSED' | null
   btcPrices: Record<string, number>
   zScoreHistory: ZScorePoint[]
+  priceHistory: Record<string, number[]>
+  spreadCandles: SpreadCandle[]
 }
 
 type WsMessage =
@@ -51,6 +53,8 @@ export function useArbitrageData(): ArbitrageState {
     circuitBreaker: null,
     btcPrices: {},
     zScoreHistory: [],
+    priceHistory: {},
+    spreadCandles: [],
   })
   const wsRef = useRef<WebSocket | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -77,10 +81,43 @@ export function useArbitrageData(): ArbitrageState {
                 const prices = { ...prev.btcPrices }
                 prices[msg.data.buy_exchange] = msg.data.buy_ask
                 prices[msg.data.sell_exchange] = msg.data.sell_bid
+
+                // Update last-20 price history per exchange
+                const hist = { ...prev.priceHistory }
+                const buyEx = msg.data.buy_exchange
+                const sellEx = msg.data.sell_exchange
+                hist[buyEx] = [...(hist[buyEx] ?? []), msg.data.buy_ask].slice(-20)
+                hist[sellEx] = [...(hist[sellEx] ?? []), msg.data.sell_bid].slice(-20)
+
+                // Build live spread candles for binance↔kraken pair (any order)
+                const exchanges = new Set([buyEx, sellEx])
+                let nextCandles = prev.spreadCandles
+                if (exchanges.has('binance') && exchanges.has('kraken')) {
+                  const spread = Math.abs(msg.data.sell_bid - msg.data.buy_ask)
+                  const minuteKey = Math.floor(Date.now() / 60000) * 60
+                  const last = nextCandles[nextCandles.length - 1]
+                  if (last && last.time === minuteKey) {
+                    const updated: SpreadCandle = {
+                      ...last,
+                      high: Math.max(last.high, spread),
+                      low: Math.min(last.low, spread),
+                      close: spread,
+                    }
+                    nextCandles = [...nextCandles.slice(0, -1), updated]
+                  } else {
+                    nextCandles = [
+                      ...nextCandles,
+                      { time: minuteKey, open: spread, high: spread, low: spread, close: spread },
+                    ].slice(-200)
+                  }
+                }
+
                 return {
                   ...prev,
                   opportunities: [msg.data, ...prev.opportunities].slice(0, MAX_ROWS),
                   btcPrices: prices,
+                  priceHistory: hist,
+                  spreadCandles: nextCandles,
                 }
               }
               case 'trade':

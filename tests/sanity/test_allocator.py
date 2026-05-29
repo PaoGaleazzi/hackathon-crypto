@@ -1,9 +1,43 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import numpy as np
 import pytest
 
-from core.allocator import optimize_allocation
+from core.allocator import build_allocation_inputs, optimize_allocation
+from core.triangular import detect_triangular
+from models.market import BBO, Exchange, Opportunity
+from models.trade import WalletBalance
+
+_NOW = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
+
+
+def _spatial_opp(net_spread: float = 100.0) -> Opportunity:
+    # available_qty=1 BTC @ ask 100_000 → capital basis 100_000 USDT.
+    return Opportunity(
+        buy_exchange=Exchange.KRAKEN,
+        sell_exchange=Exchange.COINBASE,
+        buy_ask=100_000.0,
+        sell_bid=100_150.0,
+        gross_spread=150.0,
+        net_spread=net_spread,
+        score=0.0015,
+        detected_at=_NOW,
+        available_qty=1.0,
+        optimal_qty=1.0,
+    )
+
+
+def _wallets(usdt: float = 10_000.0) -> dict[Exchange, WalletBalance]:
+    return {
+        ex: WalletBalance(exchange=ex, usdt=usdt, btc=0.5, updated_at=_NOW)
+        for ex in Exchange
+    }
+
+
+def _bbo(exchange: Exchange, bid: float, ask: float) -> BBO:
+    return BBO(exchange=exchange, bid=bid, ask=ask, bid_qty=1.0, ask_qty=1.0, ws_received_at=_NOW)
 
 
 def test_optimize_allocation_fills_to_wallet_cap_when_risk_neutral():
@@ -121,3 +155,57 @@ def test_optimize_allocation_raises_on_missing_wallet_cap():
             wallet_of=["B"],
             max_per_opp=np.array([100.0]),
         )
+
+
+# ── build_allocation_inputs (adapter) ────────────────────────────────────────────
+
+def test_build_allocation_inputs_spatial_return_and_variance():
+    # net_spread 100 over capital 100_000 → r = 0.001, σ² = r² = 1e-6.
+    inputs = build_allocation_inputs([_spatial_opp(net_spread=100.0)], [], _wallets())
+
+    assert inputs.kinds == ["spatial"]
+    assert inputs.expected_returns[0] == pytest.approx(0.001, rel=1e-9)
+    assert inputs.cov_matrix[0, 0] == pytest.approx(1e-6, rel=1e-9)
+    assert inputs.max_per_opp[0] == pytest.approx(100_000.0, rel=1e-9)
+    assert inputs.wallet_of[0] == Exchange.KRAKEN.value
+
+
+def test_build_allocation_inputs_diagonal_variance_is_return_squared():
+    inputs = build_allocation_inputs([_spatial_opp(net_spread=250.0)], [], _wallets())
+
+    r = inputs.expected_returns[0]
+    assert inputs.cov_matrix[0, 0] == pytest.approx(r ** 2, rel=1e-12)
+
+
+def test_build_allocation_inputs_combines_spatial_and_triangular():
+    state = {
+        Exchange.BINANCE: _bbo(Exchange.BINANCE, bid=99_990.0, ask=100_000.0),
+        Exchange.KRAKEN: _bbo(Exchange.KRAKEN, bid=100_500.0, ask=100_510.0),
+    }
+    tri = detect_triangular(state, stablecoin_cost=0.0)
+    assert tri  # precondition: a triangular opp exists
+
+    inputs = build_allocation_inputs([_spatial_opp()], tri, _wallets())
+
+    assert inputs.kinds == ["spatial", "triangular"]
+    # Triangular BUY leg is on Binance → draws from the Binance wallet.
+    assert inputs.wallet_of[1] == Exchange.BINANCE.value
+    assert inputs.expected_returns[1] == pytest.approx(tri[0].net_profit_pct / 100.0, rel=1e-9)
+
+
+def test_build_allocation_inputs_wallet_caps_from_balances():
+    inputs = build_allocation_inputs([_spatial_opp()], [], _wallets(usdt=7_500.0))
+
+    assert inputs.wallet_caps[Exchange.KRAKEN.value] == pytest.approx(7_500.0)
+
+
+def test_build_inputs_then_optimize_respects_wallet_cap():
+    # Two spatial opps on the same wallet (Kraken), cap 1_000 USDT. Total
+    # allocation must not exceed the cap.
+    opps = [_spatial_opp(net_spread=100.0), _spatial_opp(net_spread=200.0)]
+    inputs = build_allocation_inputs(opps, [], _wallets(usdt=1_000.0))
+    result = optimize_allocation(
+        inputs.expected_returns, inputs.cov_matrix, inputs.wallet_caps,
+        inputs.wallet_of, inputs.max_per_opp, risk_aversion=1.0,
+    )
+    assert result.allocations.sum() <= 1_000.0 + 1e-6
