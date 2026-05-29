@@ -68,7 +68,8 @@ async def run_depth() -> None:
     while True:
         asks_book: dict[float, float] = {}
         try:
-            async with websockets.connect(_URL) as ws:
+            # level2 snapshots exceed the 1 MiB default frame limit; raise to 8 MiB.
+            async with websockets.connect(_URL, max_size=2**23) as ws:
                 await ws.send(_DEPTH_SUBSCRIBE_MSG)
                 logger.info("Coinbase depth WS connected and subscribed")
                 backoff = 1

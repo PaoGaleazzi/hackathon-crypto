@@ -154,7 +154,7 @@ def normalize_coinbase_bbo(raw: dict, received_at: datetime) -> BBO | None:
     Ticker updates arrive as:
       {"channel": "ticker", "events": [{"tickers": [{
         "product_id": "BTC-USD", "best_bid": "...", "best_ask": "...",
-        "best_bid_size": "...", "best_ask_size": "..."
+        "best_bid_quantity": "...", "best_ask_quantity": "..."
       }]}]}
     Subscription confirmations have channel="subscriptions" — discarded.
     """
@@ -165,8 +165,8 @@ def normalize_coinbase_bbo(raw: dict, received_at: datetime) -> BBO | None:
         ticker = raw["events"][0]["tickers"][0]
         bid = float(ticker["best_bid"])
         ask = float(ticker["best_ask"])
-        bid_qty = float(ticker["best_bid_size"])
-        ask_qty = float(ticker["best_ask_size"])
+        bid_qty = float(ticker["best_bid_quantity"])
+        ask_qty = float(ticker["best_ask_quantity"])
     except (KeyError, IndexError, ValueError) as exc:
         logger.warning("Coinbase: failed to parse BBO: %s — raw: %s", exc, raw)
         return None
