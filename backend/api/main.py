@@ -13,13 +13,14 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import circuit_breaker, health, metrics, opportunities, trades
+from api.routes import circuit_breaker, health, metrics, opportunities, trades, triangular
 from config import settings
 from core import scanner, scorer
 from core.circuit_breaker import get_circuit_breaker
 from core.executor import simulate_execution
 from core.sizer import InsufficientBalanceError, OptimalSizer
 from core.stat_arb import get_stat_arb_detector, signal_to_dict
+from core.triangular import detect_triangular, set_latest_opportunities, triangular_to_dict
 from data.adapters import binance, bitstamp, bybit, coinbase, gemini, kraken, okx
 import data.bbo_state as bbo_state_module
 from db.connection import close_connection, get_connection
@@ -121,6 +122,10 @@ async def _update_stat_arb(bbo_state: dict[Exchange, BBO], now: datetime) -> Non
 # broadcasts don't amplify when the loop wakes on every BBO update.
 _STAT_ARB_SAMPLE_INTERVAL_S = 0.1
 
+# Triangular opportunities are detected every tick (cheap, in-memory) but the
+# top one is broadcast at most this often to avoid spamming the dashboard.
+_TRIANGULAR_BROADCAST_INTERVAL_S = 0.5
+
 
 async def _pipeline_loop() -> None:
     """Event-driven hot path: wakes on every BBO update (no fixed poll), then
@@ -130,6 +135,7 @@ async def _pipeline_loop() -> None:
     _cb = get_circuit_breaker()
     update_event = bbo_state_module.get_update_event()
     last_stat_arb_mono = 0.0
+    last_triangular_mono = 0.0
 
     while True:
         try:
@@ -151,6 +157,18 @@ async def _pipeline_loop() -> None:
 
             scan_started_at = datetime.now(timezone.utc)
             opportunities = scanner.scan_for_opportunities(bbo_state)
+
+            # Triangular detection (USDT→BTC→USD→USDT) runs alongside the spatial
+            # scan, independent of whether a spatial opportunity exists. Stored
+            # every tick for GET /api/triangular; top one broadcast, throttled.
+            triangular_opps = detect_triangular(bbo_state)
+            set_latest_opportunities(triangular_opps)
+            if triangular_opps and mono - last_triangular_mono >= _TRIANGULAR_BROADCAST_INTERVAL_S:
+                last_triangular_mono = mono
+                await _ws_manager.broadcast(json.dumps(
+                    {"type": "triangular_opportunity", "data": triangular_to_dict(triangular_opps[0])}
+                ))
+
             if not opportunities:
                 continue
 
@@ -366,6 +384,7 @@ app.include_router(opportunities.router, prefix="/api")
 app.include_router(trades.router, prefix="/api")
 app.include_router(metrics.router, prefix="/api")
 app.include_router(circuit_breaker.router, prefix="/api")
+app.include_router(triangular.router, prefix="/api")
 
 
 @app.websocket("/ws/live")

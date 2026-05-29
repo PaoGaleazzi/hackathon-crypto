@@ -104,12 +104,21 @@ export function OpportunitiesTable({ opportunities }: OpportunitiesTableProps) {
                 : 0
               const scoreWidth = Math.min(Math.max(opp.score * 100, 0), 100)
 
+              const isHot = opp.score > 0.8
+
               return (
                 <TableRow
                   key={opp.id}
-                  className="border-white/5 hover:bg-white/5 transition-colors"
+                  className={
+                    isHot
+                      ? 'border-green-500/20 bg-green-500/[0.07] animate-pulse'
+                      : 'border-white/5 hover:bg-white/5 transition-colors'
+                  }
                 >
                   <TableCell className="text-sm font-medium text-gray-200 whitespace-nowrap">
+                    {isHot && (
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400 mr-2 align-middle" />
+                    )}
                     {fmtEx(opp.buy_exchange)}
                     <span className="text-gray-500 mx-1">→</span>
                     {fmtEx(opp.sell_exchange)}

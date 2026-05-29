@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-05-29 (triangular wiring + allocator)
+- feat(triangular): withdrawal cost en el modelo. `TriangularOpportunity` ahora lleva
+  `notional`, `withdrawal_cost` (fee BTC × precio del venue de compra) y `net_profit`
+  (= notional·(M-1) − withdrawal). `net_profit_pct` sigue size-independent (fees-only)
+  y es el filtro de detección. `triangular_to_dict` para JSON; cache en memoria
+  (`set/get_latest_opportunities`) — detección 100% en memoria, nunca DuckDB.
+- feat(pipeline): `_pipeline_loop` corre `detect_triangular(bbo_state)` junto al scan
+  espacial (antes del `if not opportunities`), guarda el latest cada tick y broadcasta
+  el top con `{"type":"triangular_opportunity","data":{...}}` throttleado a 0.5s.
+  NOTE: queda gated por el circuit breaker (vive después del `allow_trade`).
+- feat(api): `GET /api/triangular` — últimas oportunidades triangulares desde el cache
+  en memoria (sin DuckDB). Router en `api/routes/triangular.py`.
+- feat(allocator): `core/allocator.py` — `optimize_allocation(...)` mean-variance con
+  cvxpy. `maximize rᵀx − λ·xᵀΣx` s.t. `0≤x_i≤max_per_opp_i` y `Σ x_i ≤ cap_wallet`.
+  Objetivo concavo (Σ PSD vía `psd_wrap`), fallback LP cuando λ=0. Devuelve
+  `AllocationResult` (allocations, expected_profit, expected_variance, objective, status).
+  Sanity tests en `tests/sanity/test_allocator.py` (9 casos: óptimo interior
+  x*=r/(2λσ²), caps por wallet, wallet compartido, λ=0 LP, validaciones).
+  NOTE: array-based; el mapeo opportunities→(r,Σ,wallet,max) y la estimación real de
+  covarianza NO están incluidos (Σ requiere modelo de riesgo).
+
+## 2026-05-29 (triangular)
+- feat(triangular): `core/triangular.py` — `detect_triangular(bbo_state)` detecta
+  arbitraje triangular real modelando el mercado como **grafo de divisas** donde
+  USD y USDT son nodos DISTINTOS. Cada BBO aporta 2 edges (buy/sell BTC); las
+  conversiones stablecoin (USDT↔USD) cierran el ciclo. Enumera ciclos dirigidos de
+  3 monedas distintas (`USDT→BTC→USD→USDT`), nunca un espacial disfrazado. Costo de
+  conversión configurable (`stablecoin_cost`, default 1bp). Devuelve lista ordenada
+  por `net_profit_pct` desc. Dedup por rotación (canonicaliza a BUY-first).
+  NOTE: modelo básico — netea solo los 3 legs (2 taker fees + 1 spread stablecoin);
+  withdrawal de BTC entre venues y latencia/slippage NO incluidos.
+  Sanity tests en `tests/sanity/test_triangular.py` (8 casos, caso conocido a mano:
+  `0.999*0.9974*1.005 = 1.0013846`). NO está wireado al pipeline/API todavía.
+
 ## 2026-05-29 (latencia)
 - perf(pipeline): `_pipeline_loop` ahora es **event-driven** — despierta con
   `bbo_state.get_update_event()` en vez de `asyncio.sleep(0.1)`. Elimina ~50ms de
