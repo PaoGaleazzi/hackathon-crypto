@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-05-29 (computed_at en WS + stress test)
+- feat(api): el broadcast WS `{"type":"rebalance"}` ahora incluye `computed_at`
+  (`_rebalance_to_dict(plan, decision_at)`) — el mismo timestamp que se guarda en cache,
+  así el payload WS coincide 1:1 con `GET /api/rebalance` y el cliente tiene el timestamp
+  exacto del server en tiempo real. `useRebalance` usa `data.computed_at` (fallback a
+  client time solo si falta).
+- test(stress): backend con `DEMO_MODE=true`, 5+ conexiones WS simultáneas a `/ws/live`:
+  - **Fan-out correcto**: los 5 clientes reciben mensajes idénticos (10 hashes únicos =
+    10 comunes a todos), en lockstep (±23ms).
+  - **Latencia estable con N clientes**: skew fan-out (max-min recv del MISMO mensaje)
+    N=1→0ms, N=5→0.10ms, N=10→0.20ms, N=20→0.75ms medio / 1.48ms máx. Sublineal, negligible.
+  - **Sin memory leak**: RSS 238→243 MB tras 120 ciclos connect/disconnect, plateau estable
+    (olas 4-6: 243/242/243 MB). El handler limpia en `WebSocketDisconnect` y `broadcast`
+    poda clientes muertos en fallo de envío (doble cleanup).
+  - **Cero errores** en el path broadcast/`ConnectionManager`/pipeline.
+  - NOTE: detectados 2 bugs PRE-EXISTENTES no relacionados, en adapters de datos upstream:
+    (1) normalizer de Coinbase espera `best_bid_size` pero el ticker trae `best_bid_quantity`
+    → ~1000 warnings de parseo, BBO de Coinbase nunca actualiza; (2) Coinbase depth (level2)
+    excede el `max_size` default de websockets → `1009 message too big` + reconexión en loop.
+- test: 249/249 verdes (suite consolidada en `tests/` raíz por otra instancia).
+
 ## 2026-05-29 (Bybit depth)
 - feat(bybit): `run_depth()` suscribe a `orderbook.10.BTCUSDT`. `normalize_bybit_depth`
   maneja snapshot (clear + rebuild desde `data.a`) y delta (deltas qty=0→remove).
