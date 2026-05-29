@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.so
+.env
+.venv/
+*.db
+*.duckdb
+.DS_Store
+node_modules/
+.next/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/

@@ -1,0 +1,111 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import type { Exchange, Metrics, Opportunity, Trade } from '@/lib/mock-data'
+
+interface PolledData {
+  metrics: Metrics | null
+  opportunities: Opportunity[]
+  trades: Trade[]
+  backendAlive: boolean
+}
+
+interface StatusResponse {
+  circuit_breaker: 'OPEN' | 'CLOSED'
+  exchanges_connected: string[]
+  uptime_s: number
+}
+
+interface LatencyResponse {
+  p50_ms: number | null
+  p95_ms: number | null
+  p99_ms: number | null
+  sample_count: number
+}
+
+interface PnlResponse {
+  cumulative_pnl_usd: number
+  trade_count: number
+}
+
+const BASE = 'http://localhost:8000'
+const POLL_MS = 2000
+
+async function fetchJson<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${BASE}${path}`, { cache: 'no-store' })
+    if (!res.ok) return null
+    return (await res.json()) as T
+  } catch {
+    return null
+  }
+}
+
+// Backend returns lowercase ("binance", "okx"); components expect PascalCase ("Binance").
+function capitalizeExchange(raw: string): Exchange {
+  return (raw.charAt(0).toUpperCase() + raw.slice(1)) as Exchange
+}
+
+export function useMetrics(): PolledData {
+  const [data, setData] = useState<PolledData>({
+    metrics: null,
+    opportunities: [],
+    trades: [],
+    backendAlive: false,
+  })
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function poll() {
+      const [opps, trades, status, latency, pnl] = await Promise.all([
+        fetchJson<Opportunity[]>('/api/opportunities'),
+        fetchJson<Trade[]>('/api/trades'),
+        fetchJson<StatusResponse>('/api/status'),
+        fetchJson<LatencyResponse>('/api/metrics/latency'),
+        fetchJson<PnlResponse>('/api/pnl'),
+      ])
+
+      if (cancelled) return
+
+      if (status === null) {
+        setData(prev => ({ ...prev, backendAlive: false }))
+        return
+      }
+
+      const resolvedOpps = opps ?? []
+      const resolvedTrades = trades ?? []
+
+      const bestSpread =
+        resolvedOpps.length > 0
+          ? Math.max(...resolvedOpps.map(o => o.spread_pct))
+          : 0
+
+      const metrics: Metrics = {
+        total_pnl_usdt: pnl?.cumulative_pnl_usd ?? 0,
+        opportunities_today: resolvedOpps.length,
+        best_spread_pct: bestSpread,
+        p95_latency_ms: latency?.p95_ms ?? 0,
+        circuit_breaker: status.circuit_breaker,
+        bot_active: true,
+        exchanges_connected: status.exchanges_connected.map(capitalizeExchange),
+      }
+
+      setData({
+        metrics,
+        opportunities: resolvedOpps,
+        trades: resolvedTrades,
+        backendAlive: true,
+      })
+    }
+
+    void poll()
+    const id = setInterval(() => { void poll() }, POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
+
+  return data
+}
