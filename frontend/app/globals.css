@@ -96,3 +96,11 @@
     @apply font-sans;
   }
 }
+
+@keyframes row-flash {
+  0%   { background-color: rgba(34, 197, 94, 0.18); }
+  100% { background-color: transparent; }
+}
+.row-flash {
+  animation: row-flash 1.5s ease-out forwards;
+}

@@ -17,11 +17,12 @@ from core import scanner, scorer
 from core.circuit_breaker import get_circuit_breaker
 from core.executor import simulate_execution
 from core.sizer import InsufficientBalanceError, OptimalSizer
+from core.stat_arb import get_stat_arb_detector, signal_to_dict
 from data.adapters import binance, kraken, okx
 import data.bbo_state as bbo_state_module
 from db.connection import close_connection, get_connection
 from db.schema import initialize_schema
-from models.market import Exchange
+from models.market import BBO, Exchange
 from models.trade import Trade, WalletBalance
 
 logging.basicConfig(level=logging.INFO)
@@ -68,6 +69,47 @@ class ConnectionManager:
 _ws_manager = ConnectionManager()
 _sizer = OptimalSizer()
 
+# ── statistical arbitrage monitoring ──────────────────────────────────────────
+
+# z_score is broadcast at most this often; entry signals (|z|>2) fire immediately.
+_STAT_ARB_BROADCAST_INTERVAL_S = 1.0
+_last_zscore_broadcast: datetime | None = None
+
+
+async def _update_stat_arb(bbo_state: dict[Exchange, BBO], now: datetime) -> None:
+    """Feed the latest BBO spreads to the detector, broadcast entry signals
+    immediately and the headline z-score at a throttled cadence.
+
+    Runs every tick, independent of the circuit breaker and of whether any
+    spatial opportunity exists — the z-score is market intelligence, not a trade.
+    """
+    global _last_zscore_broadcast
+    detector = get_stat_arb_detector()
+    signals = detector.update(bbo_state, now=now)
+
+    for sig in signals:
+        logger.info(
+            "STAT-ARB SIGNAL | %s/%s | z=%+.2f | %s",
+            sig.exchange_a.value, sig.exchange_b.value, sig.zscore, sig.direction.value,
+        )
+        await _ws_manager.broadcast(
+            json.dumps({"type": "stat_arb_signal", "data": signal_to_dict(sig)})
+        )
+
+    throttled = (
+        _last_zscore_broadcast is not None
+        and (now - _last_zscore_broadcast).total_seconds() < _STAT_ARB_BROADCAST_INTERVAL_S
+    )
+    if throttled:
+        return
+    headline = detector.headline()
+    if headline is not None:
+        _last_zscore_broadcast = now
+        await _ws_manager.broadcast(
+            json.dumps({"type": "z_score", "data": {**headline, "timestamp": now.isoformat()}})
+        )
+
+
 # ── pipeline loop ─────────────────────────────────────────────────────────────
 
 async def _pipeline_loop() -> None:
@@ -79,11 +121,13 @@ async def _pipeline_loop() -> None:
             await asyncio.sleep(0.1)
             now = datetime.now(timezone.utc)
 
-            if not _cb.allow_trade(now=now):
-                continue
-
             bbo_state = bbo_state_module.get_all()
             if len(bbo_state) < 2:
+                continue
+
+            await _update_stat_arb(bbo_state, now)
+
+            if not _cb.allow_trade(now=now):
                 continue
 
             scan_started_at = datetime.now(timezone.utc)

@@ -28,6 +28,7 @@ class Trade(BaseModel):
     fee_sell: float
     slippage_est: float
     net_profit: float
+    fill_ratio: float = 1.0  # executed_qty / requested_qty; < 1.0 on partial fill
     status: TradeStatus
     ws_received_at: datetime
     decision_at: datetime

@@ -3,17 +3,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Opportunity, PnlPoint, Trade } from '@/lib/mock-data'
 
+export interface ZScoreData {
+  pair: string
+  z_score: number
+  spread: number
+  timestamp: string
+}
+
 interface ArbitrageState {
   opportunities: Opportunity[]
   trades: Trade[]
   pnlPoints: PnlPoint[]
   connected: boolean
+  latestLatencyMs: number | null
+  zScore: ZScoreData | null
+  circuitBreaker: 'OPEN' | 'CLOSED' | null
 }
 
 type WsMessage =
   | { type: 'opportunity'; data: Opportunity }
   | { type: 'trade'; data: Trade }
   | { type: 'pnl_update'; data: PnlPoint }
+  | { type: 'z_score'; data: ZScoreData }
+  | { type: 'circuit_breaker'; data: { state: 'OPEN' | 'CLOSED' } }
 
 const WS_URL = 'ws://localhost:8000/ws/live'
 const RECONNECT_DELAY_MS = 3000
@@ -26,6 +38,9 @@ export function useArbitrageData(): ArbitrageState {
     trades: [],
     pnlPoints: [],
     connected: false,
+    latestLatencyMs: null,
+    zScore: null,
+    circuitBreaker: null,
   })
   const wsRef = useRef<WebSocket | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -57,12 +72,19 @@ export function useArbitrageData(): ArbitrageState {
                 return {
                   ...prev,
                   trades: [msg.data, ...prev.trades].slice(0, MAX_ROWS),
+                  latestLatencyMs: msg.data.latency_ms,
                 }
               case 'pnl_update':
                 return {
                   ...prev,
                   pnlPoints: [...prev.pnlPoints, msg.data].slice(-MAX_PNL_POINTS),
                 }
+              case 'z_score':
+                return { ...prev, zScore: msg.data }
+              case 'circuit_breaker':
+                return { ...prev, circuitBreaker: msg.data.state }
+              default:
+                return prev
             }
           })
         } catch {

@@ -32,6 +32,8 @@ def scan_for_opportunities(bbo_state: dict[Exchange, BBO]) -> list[Opportunity]:
             buy_ask=bbo_buy.ask,
             sell_bid=bbo_sell.bid,
             qty=available_qty,
+            buy_depth_qty=bbo_buy.ask_qty,
+            sell_depth_qty=bbo_sell.bid_qty,
         )
 
         if net_spread <= 0:

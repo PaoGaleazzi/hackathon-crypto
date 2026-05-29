@@ -3,9 +3,16 @@ import { type Metrics } from '@/lib/mock-data'
 
 interface HeaderProps {
   metrics: Metrics
+  latestLatencyMs?: number | null
 }
 
-export function Header({ metrics }: HeaderProps) {
+function latencyColor(ms: number): string {
+  if (ms < 50)  return 'text-green-400'
+  if (ms < 150) return 'text-yellow-400'
+  return 'text-red-400'
+}
+
+export function Header({ metrics, latestLatencyMs }: HeaderProps) {
   return (
     <header className="bg-gray-900 border-b border-white/10 px-4 md:px-8 py-4">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -25,7 +32,17 @@ export function Header({ metrics }: HeaderProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {latestLatencyMs != null && (
+            <div
+              className={`flex items-center gap-1 px-2 py-1 rounded bg-white/5 text-xs font-mono ${latencyColor(latestLatencyMs)}`}
+              title="Last trade round-trip latency"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+              {latestLatencyMs.toFixed(1)}ms
+            </div>
+          )}
+
           <span className="text-xs text-gray-400 uppercase tracking-wide">
             Circuit Breaker:
           </span>

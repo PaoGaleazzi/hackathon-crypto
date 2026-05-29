@@ -1,41 +1,49 @@
-export type Exchange = 'Binance' | 'Kraken' | 'Coinbase'
+export type Exchange = 'binance' | 'kraken' | 'coinbase' | 'okx'
+
 export type OpportunityStatus =
   | 'EXECUTED'
   | 'REJECTED_NEGATIVE_NET'
   | 'ABORTED_STALE'
   | 'PENDING'
-export type TradeStatus = 'EXECUTED' | 'PARTIAL_FILL' | 'ABORTED_STALE'
+
+export type TradeStatus =
+  | 'EXECUTED'
+  | 'ABORTED_STALE'
+  | 'SKIPPED_MIN_FILL'
+  | 'REJECTED_INSUFFICIENT_BALANCE'
+  | 'REJECTED_NEGATIVE_NET'
+  | 'CIRCUIT_BREAKER_OPEN'
 
 export interface Opportunity {
   id: string
-  exchange_buy: Exchange
-  exchange_sell: Exchange
-  spread_pct: number
-  gross_usdt: number
-  fee_buy_usdt: number
-  fee_sell_usdt: number
-  slippage_usdt: number
-  net_usdt: number
+  buy_exchange: Exchange
+  sell_exchange: Exchange
+  buy_ask: number
+  sell_bid: number
+  gross_spread: number
+  net_spread: number
   score: number
-  qty_btc: number
-  timestamp: string
+  optimal_qty: number
+  detected_at: string
   status: OpportunityStatus
 }
 
 export interface Trade {
   id: string
-  exchange_buy: Exchange
-  exchange_sell: Exchange
-  qty_btc: number
-  price_buy: number
-  price_sell: number
-  gross_usdt: number
-  fee_total_usdt: number
-  slippage_usdt: number
-  net_usdt: number
-  fill_ratio: number
-  timestamp: string
+  buy_exchange: Exchange
+  sell_exchange: Exchange
+  qty: number
+  buy_price: number
+  sell_price: number
+  fee_buy: number
+  fee_sell: number
+  slippage_est: number
+  net_profit: number
   status: TradeStatus
+  ws_received_at: string
+  decision_at: string
+  latency_ms: number
+  executed_at: string
 }
 
 export interface PnlPoint {
@@ -55,619 +63,57 @@ export interface Metrics {
 
 // Base timestamp: 4 hours ago from a fixed demo time
 const NOW_MS = new Date('2026-05-29T20:00:00Z').getTime()
-const FOUR_HOURS_MS = 4 * 60 * 60 * 1000
 
 function tsAt(minutesAgo: number): string {
   return new Date(NOW_MS - minutesAgo * 60 * 1000).toISOString()
 }
 
-const EXCHANGES: Exchange[] = ['Binance', 'Kraken', 'Coinbase']
 const BTC_BASE = 67_400
 
 export const OPPORTUNITIES: Opportunity[] = [
-  {
-    id: 'opp-001',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Kraken',
-    spread_pct: 0.38,
-    gross_usdt: 255.92,
-    fee_buy_usdt: 33.73,
-    fee_sell_usdt: 41.10,
-    slippage_usdt: 12.40,
-    net_usdt: 168.69,
-    score: 0.92,
-    qty_btc: 0.10,
-    timestamp: tsAt(12),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-002',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Coinbase',
-    spread_pct: 0.22,
-    gross_usdt: 88.16,
-    fee_buy_usdt: 14.20,
-    fee_sell_usdt: 17.80,
-    slippage_usdt: 9.10,
-    net_usdt: 47.06,
-    score: 0.74,
-    qty_btc: 0.058,
-    timestamp: tsAt(24),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-003',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Binance',
-    spread_pct: 0.05,
-    gross_usdt: 30.33,
-    fee_buy_usdt: 18.50,
-    fee_sell_usdt: 19.20,
-    slippage_usdt: 8.90,
-    net_usdt: -16.27,
-    score: 0.18,
-    qty_btc: 0.09,
-    timestamp: tsAt(37),
-    status: 'REJECTED_NEGATIVE_NET',
-  },
-  {
-    id: 'opp-004',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Coinbase',
-    spread_pct: 0.31,
-    gross_usdt: 186.11,
-    fee_buy_usdt: 24.55,
-    fee_sell_usdt: 28.90,
-    slippage_usdt: 10.20,
-    net_usdt: 122.46,
-    score: 0.87,
-    qty_btc: 0.089,
-    timestamp: tsAt(48),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-005',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Binance',
-    spread_pct: 0.18,
-    gross_usdt: 121.32,
-    fee_buy_usdt: 15.80,
-    fee_sell_usdt: 19.50,
-    slippage_usdt: 7.40,
-    net_usdt: 78.62,
-    score: 0.65,
-    qty_btc: 0.107,
-    timestamp: tsAt(61),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-006',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Kraken',
-    spread_pct: 0.07,
-    gross_usdt: 47.18,
-    fee_buy_usdt: 22.10,
-    fee_sell_usdt: 25.70,
-    slippage_usdt: 11.30,
-    net_usdt: -11.92,
-    score: 0.22,
-    qty_btc: 0.105,
-    timestamp: tsAt(74),
-    status: 'REJECTED_NEGATIVE_NET',
-  },
-  {
-    id: 'opp-007',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Kraken',
-    spread_pct: 0.26,
-    gross_usdt: 150.83,
-    fee_buy_usdt: 19.90,
-    fee_sell_usdt: 23.70,
-    slippage_usdt: 9.80,
-    net_usdt: 97.43,
-    score: 0.80,
-    qty_btc: 0.086,
-    timestamp: tsAt(85),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-008',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Coinbase',
-    spread_pct: 0.14,
-    gross_usdt: 94.36,
-    fee_buy_usdt: 12.20,
-    fee_sell_usdt: 15.60,
-    slippage_usdt: 8.20,
-    net_usdt: 58.36,
-    score: 0.55,
-    qty_btc: 0.104,
-    timestamp: tsAt(98),
-    status: 'ABORTED_STALE',
-  },
-  {
-    id: 'opp-009',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Coinbase',
-    spread_pct: 0.33,
-    gross_usdt: 198.45,
-    fee_buy_usdt: 26.10,
-    fee_sell_usdt: 30.80,
-    slippage_usdt: 11.60,
-    net_usdt: 129.95,
-    score: 0.89,
-    qty_btc: 0.09,
-    timestamp: tsAt(112),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-010',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Binance',
-    spread_pct: 0.09,
-    gross_usdt: 60.66,
-    fee_buy_usdt: 28.40,
-    fee_sell_usdt: 31.90,
-    slippage_usdt: 9.10,
-    net_usdt: -8.74,
-    score: 0.30,
-    qty_btc: 0.10,
-    timestamp: tsAt(127),
-    status: 'REJECTED_NEGATIVE_NET',
-  },
-  {
-    id: 'opp-011',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Kraken',
-    spread_pct: 0.29,
-    gross_usdt: 174.52,
-    fee_buy_usdt: 23.00,
-    fee_sell_usdt: 27.30,
-    slippage_usdt: 10.40,
-    net_usdt: 113.82,
-    score: 0.83,
-    qty_btc: 0.089,
-    timestamp: tsAt(140),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-012',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Binance',
-    spread_pct: 0.04,
-    gross_usdt: 26.96,
-    fee_buy_usdt: 17.80,
-    fee_sell_usdt: 20.10,
-    slippage_usdt: 6.90,
-    net_usdt: -17.84,
-    score: 0.11,
-    qty_btc: 0.10,
-    timestamp: tsAt(155),
-    status: 'REJECTED_NEGATIVE_NET',
-  },
-  {
-    id: 'opp-013',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Binance',
-    spread_pct: 0.21,
-    gross_usdt: 127.20,
-    fee_buy_usdt: 16.70,
-    fee_sell_usdt: 20.40,
-    slippage_usdt: 8.70,
-    net_usdt: 81.40,
-    score: 0.71,
-    qty_btc: 0.09,
-    timestamp: tsAt(168),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-014',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Coinbase',
-    spread_pct: 0.16,
-    gross_usdt: 80.88,
-    fee_buy_usdt: 10.60,
-    fee_sell_usdt: 13.90,
-    slippage_usdt: 7.60,
-    net_usdt: 48.78,
-    score: 0.59,
-    qty_btc: 0.075,
-    timestamp: tsAt(182),
-    status: 'ABORTED_STALE',
-  },
-  {
-    id: 'opp-015',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Coinbase',
-    spread_pct: 0.34,
-    gross_usdt: 204.32,
-    fee_buy_usdt: 26.90,
-    fee_sell_usdt: 31.70,
-    slippage_usdt: 12.10,
-    net_usdt: 133.62,
-    score: 0.91,
-    qty_btc: 0.09,
-    timestamp: tsAt(195),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-016',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Kraken',
-    spread_pct: 0.11,
-    gross_usdt: 74.14,
-    fee_buy_usdt: 9.70,
-    fee_sell_usdt: 12.80,
-    slippage_usdt: 7.00,
-    net_usdt: 44.64,
-    score: 0.48,
-    qty_btc: 0.10,
-    timestamp: tsAt(210),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-017',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Kraken',
-    spread_pct: 0.06,
-    gross_usdt: 36.22,
-    fee_buy_usdt: 20.30,
-    fee_sell_usdt: 23.90,
-    slippage_usdt: 8.50,
-    net_usdt: -16.48,
-    score: 0.17,
-    qty_btc: 0.09,
-    timestamp: tsAt(225),
-    status: 'REJECTED_NEGATIVE_NET',
-  },
-  {
-    id: 'opp-018',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Binance',
-    spread_pct: 0.24,
-    gross_usdt: 144.72,
-    fee_buy_usdt: 19.00,
-    fee_sell_usdt: 22.70,
-    slippage_usdt: 9.30,
-    net_usdt: 93.72,
-    score: 0.77,
-    qty_btc: 0.09,
-    timestamp: tsAt(238),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'opp-019',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Binance',
-    spread_pct: 0.19,
-    gross_usdt: 108.12,
-    fee_buy_usdt: 14.20,
-    fee_sell_usdt: 17.90,
-    slippage_usdt: 8.10,
-    net_usdt: 67.92,
-    score: 0.62,
-    qty_btc: 0.085,
-    timestamp: tsAt(5),
-    status: 'PENDING',
-  },
-  {
-    id: 'opp-020',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Coinbase',
-    spread_pct: 0.28,
-    gross_usdt: 168.27,
-    fee_buy_usdt: 22.10,
-    fee_sell_usdt: 26.50,
-    slippage_usdt: 10.00,
-    net_usdt: 109.67,
-    score: 0.85,
-    qty_btc: 0.089,
-    timestamp: tsAt(2),
-    status: 'PENDING',
-  },
+  { id: 'opp-001', buy_exchange: 'binance',  sell_exchange: 'kraken',   buy_ask: BTC_BASE, sell_bid: 67_656, gross_spread: 255.92, net_spread: 168.69, score: 0.92, optimal_qty: 0.100, detected_at: tsAt(12),  status: 'EXECUTED' },
+  { id: 'opp-002', buy_exchange: 'kraken',   sell_exchange: 'coinbase', buy_ask: BTC_BASE, sell_bid: 67_548, gross_spread:  88.16, net_spread:  47.06, score: 0.74, optimal_qty: 0.058, detected_at: tsAt(24),  status: 'EXECUTED' },
+  { id: 'opp-003', buy_exchange: 'coinbase', sell_exchange: 'binance',  buy_ask: BTC_BASE, sell_bid: 67_434, gross_spread:  30.33, net_spread: -16.27, score: 0.18, optimal_qty: 0.090, detected_at: tsAt(37),  status: 'REJECTED_NEGATIVE_NET' },
+  { id: 'opp-004', buy_exchange: 'binance',  sell_exchange: 'coinbase', buy_ask: BTC_BASE, sell_bid: 67_609, gross_spread: 186.11, net_spread: 122.46, score: 0.87, optimal_qty: 0.089, detected_at: tsAt(48),  status: 'EXECUTED' },
+  { id: 'opp-005', buy_exchange: 'kraken',   sell_exchange: 'binance',  buy_ask: BTC_BASE, sell_bid: 67_521, gross_spread: 121.32, net_spread:  78.62, score: 0.65, optimal_qty: 0.107, detected_at: tsAt(61),  status: 'EXECUTED' },
+  { id: 'opp-006', buy_exchange: 'binance',  sell_exchange: 'kraken',   buy_ask: BTC_BASE, sell_bid: 67_447, gross_spread:  47.18, net_spread: -11.92, score: 0.22, optimal_qty: 0.105, detected_at: tsAt(74),  status: 'REJECTED_NEGATIVE_NET' },
+  { id: 'opp-007', buy_exchange: 'coinbase', sell_exchange: 'kraken',   buy_ask: BTC_BASE, sell_bid: 67_575, gross_spread: 150.83, net_spread:  97.43, score: 0.80, optimal_qty: 0.086, detected_at: tsAt(85),  status: 'EXECUTED' },
+  { id: 'opp-008', buy_exchange: 'binance',  sell_exchange: 'coinbase', buy_ask: BTC_BASE, sell_bid: 67_494, gross_spread:  94.36, net_spread:  58.36, score: 0.55, optimal_qty: 0.104, detected_at: tsAt(98),  status: 'ABORTED_STALE' },
+  { id: 'opp-009', buy_exchange: 'kraken',   sell_exchange: 'coinbase', buy_ask: BTC_BASE, sell_bid: 67_622, gross_spread: 198.45, net_spread: 129.95, score: 0.89, optimal_qty: 0.090, detected_at: tsAt(112), status: 'EXECUTED' },
+  { id: 'opp-010', buy_exchange: 'coinbase', sell_exchange: 'binance',  buy_ask: BTC_BASE, sell_bid: 67_461, gross_spread:  60.66, net_spread:  -8.74, score: 0.30, optimal_qty: 0.100, detected_at: tsAt(127), status: 'REJECTED_NEGATIVE_NET' },
+  { id: 'opp-011', buy_exchange: 'binance',  sell_exchange: 'kraken',   buy_ask: BTC_BASE, sell_bid: 67_596, gross_spread: 174.52, net_spread: 113.82, score: 0.83, optimal_qty: 0.089, detected_at: tsAt(140), status: 'EXECUTED' },
+  { id: 'opp-012', buy_exchange: 'kraken',   sell_exchange: 'binance',  buy_ask: BTC_BASE, sell_bid: 67_427, gross_spread:  26.96, net_spread: -17.84, score: 0.11, optimal_qty: 0.100, detected_at: tsAt(155), status: 'REJECTED_NEGATIVE_NET' },
+  { id: 'opp-013', buy_exchange: 'coinbase', sell_exchange: 'binance',  buy_ask: BTC_BASE, sell_bid: 67_541, gross_spread: 127.20, net_spread:  81.40, score: 0.71, optimal_qty: 0.090, detected_at: tsAt(168), status: 'EXECUTED' },
+  { id: 'opp-014', buy_exchange: 'binance',  sell_exchange: 'coinbase', buy_ask: BTC_BASE, sell_bid: 67_508, gross_spread:  80.88, net_spread:  48.78, score: 0.59, optimal_qty: 0.075, detected_at: tsAt(182), status: 'ABORTED_STALE' },
+  { id: 'opp-015', buy_exchange: 'kraken',   sell_exchange: 'coinbase', buy_ask: BTC_BASE, sell_bid: 67_629, gross_spread: 204.32, net_spread: 133.62, score: 0.91, optimal_qty: 0.090, detected_at: tsAt(195), status: 'EXECUTED' },
+  { id: 'opp-016', buy_exchange: 'coinbase', sell_exchange: 'kraken',   buy_ask: BTC_BASE, sell_bid: 67_474, gross_spread:  74.14, net_spread:  44.64, score: 0.48, optimal_qty: 0.100, detected_at: tsAt(210), status: 'EXECUTED' },
+  { id: 'opp-017', buy_exchange: 'binance',  sell_exchange: 'kraken',   buy_ask: BTC_BASE, sell_bid: 67_440, gross_spread:  36.22, net_spread: -16.48, score: 0.17, optimal_qty: 0.090, detected_at: tsAt(225), status: 'REJECTED_NEGATIVE_NET' },
+  { id: 'opp-018', buy_exchange: 'kraken',   sell_exchange: 'binance',  buy_ask: BTC_BASE, sell_bid: 67_562, gross_spread: 144.72, net_spread:  93.72, score: 0.77, optimal_qty: 0.090, detected_at: tsAt(238), status: 'EXECUTED' },
+  { id: 'opp-019', buy_exchange: 'coinbase', sell_exchange: 'binance',  buy_ask: BTC_BASE, sell_bid: 67_528, gross_spread: 108.12, net_spread:  67.92, score: 0.62, optimal_qty: 0.085, detected_at: tsAt(5),   status: 'PENDING' },
+  { id: 'opp-020', buy_exchange: 'binance',  sell_exchange: 'coinbase', buy_ask: BTC_BASE, sell_bid: 67_588, gross_spread: 168.27, net_spread: 109.67, score: 0.85, optimal_qty: 0.089, detected_at: tsAt(2),   status: 'PENDING' },
 ]
 
 export const TRADES: Trade[] = [
-  {
-    id: 'trd-001',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Kraken',
-    qty_btc: 0.10,
-    price_buy: 67_382.50,
-    price_sell: 67_638.42,
-    gross_usdt: 255.92,
-    fee_total_usdt: 74.83,
-    slippage_usdt: 12.40,
-    net_usdt: 168.69,
-    fill_ratio: 1.0,
-    timestamp: tsAt(12),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-002',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Coinbase',
-    qty_btc: 0.058,
-    price_buy: 67_355.20,
-    price_sell: 67_507.32,
-    gross_usdt: 88.16,
-    fee_total_usdt: 32.00,
-    slippage_usdt: 9.10,
-    net_usdt: 47.06,
-    fill_ratio: 1.0,
-    timestamp: tsAt(24),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-003',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Coinbase',
-    qty_btc: 0.089,
-    price_buy: 67_391.10,
-    price_sell: 67_599.38,
-    gross_usdt: 186.11,
-    fee_total_usdt: 53.45,
-    slippage_usdt: 10.20,
-    net_usdt: 122.46,
-    fill_ratio: 0.97,
-    timestamp: tsAt(48),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-004',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Binance',
-    qty_btc: 0.107,
-    price_buy: 67_368.90,
-    price_sell: 67_490.22,
-    gross_usdt: 121.32,
-    fee_total_usdt: 35.30,
-    slippage_usdt: 7.40,
-    net_usdt: 78.62,
-    fill_ratio: 1.0,
-    timestamp: tsAt(61),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-005',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Kraken',
-    qty_btc: 0.086,
-    price_buy: 67_344.75,
-    price_sell: 67_519.93,
-    gross_usdt: 150.83,
-    fee_total_usdt: 43.60,
-    slippage_usdt: 9.80,
-    net_usdt: 97.43,
-    fill_ratio: 0.93,
-    timestamp: tsAt(85),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-006',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Coinbase',
-    qty_btc: 0.09,
-    price_buy: 67_378.40,
-    price_sell: 67_600.50,
-    gross_usdt: 198.45,
-    fee_total_usdt: 56.90,
-    slippage_usdt: 11.60,
-    net_usdt: 129.95,
-    fill_ratio: 1.0,
-    timestamp: tsAt(112),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-007',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Kraken',
-    qty_btc: 0.089,
-    price_buy: 67_362.80,
-    price_sell: 67_558.52,
-    gross_usdt: 174.52,
-    fee_total_usdt: 50.30,
-    slippage_usdt: 10.40,
-    net_usdt: 113.82,
-    fill_ratio: 0.95,
-    timestamp: tsAt(140),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-008',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Binance',
-    qty_btc: 0.09,
-    price_buy: 67_338.60,
-    price_sell: 67_479.80,
-    gross_usdt: 127.20,
-    fee_total_usdt: 37.10,
-    slippage_usdt: 8.70,
-    net_usdt: 81.40,
-    fill_ratio: 1.0,
-    timestamp: tsAt(168),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-009',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Coinbase',
-    qty_btc: 0.09,
-    price_buy: 67_372.20,
-    price_sell: 67_599.80,
-    gross_usdt: 204.32,
-    fee_total_usdt: 58.60,
-    slippage_usdt: 12.10,
-    net_usdt: 133.62,
-    fill_ratio: 1.0,
-    timestamp: tsAt(195),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-010',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Kraken',
-    qty_btc: 0.10,
-    price_buy: 67_325.40,
-    price_sell: 67_399.54,
-    gross_usdt: 74.14,
-    fee_total_usdt: 22.50,
-    slippage_usdt: 7.00,
-    net_usdt: 44.64,
-    fill_ratio: 0.88,
-    timestamp: tsAt(210),
-    status: 'PARTIAL_FILL',
-  },
-  {
-    id: 'trd-011',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Binance',
-    qty_btc: 0.09,
-    price_buy: 67_348.10,
-    price_sell: 67_512.82,
-    gross_usdt: 144.72,
-    fee_total_usdt: 41.70,
-    slippage_usdt: 9.30,
-    net_usdt: 93.72,
-    fill_ratio: 1.0,
-    timestamp: tsAt(238),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-012',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Coinbase',
-    qty_btc: 0.06,
-    price_buy: 67_405.30,
-    price_sell: 67_457.70,
-    gross_usdt: 31.44,
-    fee_total_usdt: 18.20,
-    slippage_usdt: 6.10,
-    net_usdt: 7.14,
-    fill_ratio: 0.72,
-    timestamp: tsAt(252),
-    status: 'PARTIAL_FILL',
-  },
-  {
-    id: 'trd-013',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Coinbase',
-    qty_btc: 0.15,
-    price_buy: 67_332.80,
-    price_sell: 67_539.26,
-    gross_usdt: 309.69,
-    fee_total_usdt: 81.40,
-    slippage_usdt: 15.30,
-    net_usdt: 212.99,
-    fill_ratio: 1.0,
-    timestamp: tsAt(270),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-014',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Binance',
-    qty_btc: 0.08,
-    price_buy: 67_358.90,
-    price_sell: 67_458.24,
-    gross_usdt: 79.47,
-    fee_total_usdt: 30.10,
-    slippage_usdt: 7.80,
-    net_usdt: 41.57,
-    fill_ratio: 0.91,
-    timestamp: tsAt(289),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-015',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Kraken',
-    qty_btc: 0.12,
-    price_buy: 67_320.60,
-    price_sell: 67_495.32,
-    gross_usdt: 209.66,
-    fee_total_usdt: 55.10,
-    slippage_usdt: 11.90,
-    net_usdt: 142.66,
-    fill_ratio: 1.0,
-    timestamp: tsAt(305),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-016',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Binance',
-    qty_btc: 0.075,
-    price_buy: 67_388.20,
-    price_sell: 67_496.54,
-    gross_usdt: 81.25,
-    fee_total_usdt: 26.70,
-    slippage_usdt: 7.50,
-    net_usdt: 47.05,
-    fill_ratio: 0.97,
-    timestamp: tsAt(322),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-017',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Kraken',
-    qty_btc: 0.11,
-    price_buy: 67_310.50,
-    price_sell: 67_498.92,
-    gross_usdt: 207.72,
-    fee_total_usdt: 54.50,
-    slippage_usdt: 12.40,
-    net_usdt: 140.82,
-    fill_ratio: 1.0,
-    timestamp: tsAt(340),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-018',
-    exchange_buy: 'Binance',
-    exchange_sell: 'Coinbase',
-    qty_btc: 0.04,
-    price_buy: 67_418.70,
-    price_sell: 67_451.10,
-    gross_usdt: 12.96,
-    fee_total_usdt: 9.80,
-    slippage_usdt: 5.20,
-    net_usdt: 3.24,
-    fill_ratio: 0.70,
-    timestamp: tsAt(358),
-    status: 'PARTIAL_FILL',
-  },
-  {
-    id: 'trd-019',
-    exchange_buy: 'Kraken',
-    exchange_sell: 'Coinbase',
-    qty_btc: 0.13,
-    price_buy: 67_298.40,
-    price_sell: 67_499.08,
-    gross_usdt: 260.89,
-    fee_total_usdt: 68.50,
-    slippage_usdt: 13.70,
-    net_usdt: 178.69,
-    fill_ratio: 1.0,
-    timestamp: tsAt(375),
-    status: 'EXECUTED',
-  },
-  {
-    id: 'trd-020',
-    exchange_buy: 'Coinbase',
-    exchange_sell: 'Binance',
-    qty_btc: 0.09,
-    price_buy: 67_365.00,
-    price_sell: 67_498.20,
-    gross_usdt: 119.88,
-    fee_total_usdt: 38.40,
-    slippage_usdt: 8.40,
-    net_usdt: 73.08,
-    fill_ratio: 0.94,
-    timestamp: tsAt(393),
-    status: 'EXECUTED',
-  },
+  { id: 'trd-001', buy_exchange: 'binance',  sell_exchange: 'kraken',   qty: 0.100, buy_price: 67_382.50, sell_price: 67_638.42, fee_buy: 26.94, fee_sell: 47.89, slippage_est: 12.40, net_profit: 168.69, status: 'EXECUTED', ws_received_at: tsAt(12),  decision_at: tsAt(12),  latency_ms: 42.3, executed_at: tsAt(12) },
+  { id: 'trd-002', buy_exchange: 'kraken',   sell_exchange: 'coinbase', qty: 0.058, buy_price: 67_355.20, sell_price: 67_507.32, fee_buy: 11.52, fee_sell: 20.48, slippage_est:  9.10, net_profit:  47.06, status: 'EXECUTED', ws_received_at: tsAt(24),  decision_at: tsAt(24),  latency_ms: 38.1, executed_at: tsAt(24) },
+  { id: 'trd-003', buy_exchange: 'binance',  sell_exchange: 'coinbase', qty: 0.089, buy_price: 67_391.10, sell_price: 67_599.38, fee_buy: 19.24, fee_sell: 34.21, slippage_est: 10.20, net_profit: 122.46, status: 'EXECUTED', ws_received_at: tsAt(48),  decision_at: tsAt(48),  latency_ms: 55.7, executed_at: tsAt(48) },
+  { id: 'trd-004', buy_exchange: 'kraken',   sell_exchange: 'binance',  qty: 0.107, buy_price: 67_368.90, sell_price: 67_490.22, fee_buy: 12.71, fee_sell: 22.59, slippage_est:  7.40, net_profit:  78.62, status: 'EXECUTED', ws_received_at: tsAt(61),  decision_at: tsAt(61),  latency_ms: 31.8, executed_at: tsAt(61) },
+  { id: 'trd-005', buy_exchange: 'coinbase', sell_exchange: 'kraken',   qty: 0.086, buy_price: 67_344.75, sell_price: 67_519.93, fee_buy: 15.70, fee_sell: 27.90, slippage_est:  9.80, net_profit:  97.43, status: 'EXECUTED', ws_received_at: tsAt(85),  decision_at: tsAt(85),  latency_ms: 47.2, executed_at: tsAt(85) },
+  { id: 'trd-006', buy_exchange: 'kraken',   sell_exchange: 'coinbase', qty: 0.090, buy_price: 67_378.40, sell_price: 67_600.50, fee_buy: 20.48, fee_sell: 36.42, slippage_est: 11.60, net_profit: 129.95, status: 'EXECUTED', ws_received_at: tsAt(112), decision_at: tsAt(112), latency_ms: 29.6, executed_at: tsAt(112) },
+  { id: 'trd-007', buy_exchange: 'binance',  sell_exchange: 'kraken',   qty: 0.089, buy_price: 67_362.80, sell_price: 67_558.52, fee_buy: 18.11, fee_sell: 32.19, slippage_est: 10.40, net_profit: 113.82, status: 'EXECUTED', ws_received_at: tsAt(140), decision_at: tsAt(140), latency_ms: 61.4, executed_at: tsAt(140) },
+  { id: 'trd-008', buy_exchange: 'coinbase', sell_exchange: 'binance',  qty: 0.090, buy_price: 67_338.60, sell_price: 67_479.80, fee_buy: 13.36, fee_sell: 23.74, slippage_est:  8.70, net_profit:  81.40, status: 'EXECUTED', ws_received_at: tsAt(168), decision_at: tsAt(168), latency_ms: 44.9, executed_at: tsAt(168) },
+  { id: 'trd-009', buy_exchange: 'kraken',   sell_exchange: 'coinbase', qty: 0.090, buy_price: 67_372.20, sell_price: 67_599.80, fee_buy: 21.10, fee_sell: 37.50, slippage_est: 12.10, net_profit: 133.62, status: 'EXECUTED', ws_received_at: tsAt(195), decision_at: tsAt(195), latency_ms: 33.5, executed_at: tsAt(195) },
+  { id: 'trd-010', buy_exchange: 'coinbase', sell_exchange: 'kraken',   qty: 0.100, buy_price: 67_325.40, sell_price: 67_399.54, fee_buy:  8.10, fee_sell: 14.40, slippage_est:  7.00, net_profit:  44.64, status: 'SKIPPED_MIN_FILL', ws_received_at: tsAt(210), decision_at: tsAt(210), latency_ms: 28.3, executed_at: tsAt(210) },
+  { id: 'trd-011', buy_exchange: 'kraken',   sell_exchange: 'binance',  qty: 0.090, buy_price: 67_348.10, sell_price: 67_512.82, fee_buy: 15.01, fee_sell: 26.69, slippage_est:  9.30, net_profit:  93.72, status: 'EXECUTED', ws_received_at: tsAt(238), decision_at: tsAt(238), latency_ms: 52.1, executed_at: tsAt(238) },
+  { id: 'trd-012', buy_exchange: 'binance',  sell_exchange: 'coinbase', qty: 0.060, buy_price: 67_405.30, sell_price: 67_457.70, fee_buy:  6.55, fee_sell: 11.65, slippage_est:  6.10, net_profit:   7.14, status: 'SKIPPED_MIN_FILL', ws_received_at: tsAt(252), decision_at: tsAt(252), latency_ms: 67.8, executed_at: tsAt(252) },
+  { id: 'trd-013', buy_exchange: 'kraken',   sell_exchange: 'coinbase', qty: 0.150, buy_price: 67_332.80, sell_price: 67_539.26, fee_buy: 29.30, fee_sell: 52.10, slippage_est: 15.30, net_profit: 212.99, status: 'EXECUTED', ws_received_at: tsAt(270), decision_at: tsAt(270), latency_ms: 39.2, executed_at: tsAt(270) },
+  { id: 'trd-014', buy_exchange: 'coinbase', sell_exchange: 'binance',  qty: 0.080, buy_price: 67_358.90, sell_price: 67_458.24, fee_buy: 10.84, fee_sell: 19.26, slippage_est:  7.80, net_profit:  41.57, status: 'EXECUTED', ws_received_at: tsAt(289), decision_at: tsAt(289), latency_ms: 25.7, executed_at: tsAt(289) },
+  { id: 'trd-015', buy_exchange: 'binance',  sell_exchange: 'kraken',   qty: 0.120, buy_price: 67_320.60, sell_price: 67_495.32, fee_buy: 19.84, fee_sell: 35.26, slippage_est: 11.90, net_profit: 142.66, status: 'EXECUTED', ws_received_at: tsAt(305), decision_at: tsAt(305), latency_ms: 48.6, executed_at: tsAt(305) },
+  { id: 'trd-016', buy_exchange: 'kraken',   sell_exchange: 'binance',  qty: 0.075, buy_price: 67_388.20, sell_price: 67_496.54, fee_buy:  9.61, fee_sell: 17.09, slippage_est:  7.50, net_profit:  47.05, status: 'EXECUTED', ws_received_at: tsAt(322), decision_at: tsAt(322), latency_ms: 36.4, executed_at: tsAt(322) },
+  { id: 'trd-017', buy_exchange: 'coinbase', sell_exchange: 'kraken',   qty: 0.110, buy_price: 67_310.50, sell_price: 67_498.92, fee_buy: 19.62, fee_sell: 34.88, slippage_est: 12.40, net_profit: 140.82, status: 'EXECUTED', ws_received_at: tsAt(340), decision_at: tsAt(340), latency_ms: 43.1, executed_at: tsAt(340) },
+  { id: 'trd-018', buy_exchange: 'binance',  sell_exchange: 'coinbase', qty: 0.040, buy_price: 67_418.70, sell_price: 67_451.10, fee_buy:  3.53, fee_sell:  6.27, slippage_est:  5.20, net_profit:   3.24, status: 'SKIPPED_MIN_FILL', ws_received_at: tsAt(358), decision_at: tsAt(358), latency_ms: 71.5, executed_at: tsAt(358) },
+  { id: 'trd-019', buy_exchange: 'kraken',   sell_exchange: 'coinbase', qty: 0.130, buy_price: 67_298.40, sell_price: 67_499.08, fee_buy: 24.66, fee_sell: 43.84, slippage_est: 13.70, net_profit: 178.69, status: 'EXECUTED', ws_received_at: tsAt(375), decision_at: tsAt(375), latency_ms: 34.8, executed_at: tsAt(375) },
+  { id: 'trd-020', buy_exchange: 'coinbase', sell_exchange: 'binance',  qty: 0.090, buy_price: 67_365.00, sell_price: 67_498.20, fee_buy: 13.82, fee_sell: 24.58, slippage_est:  8.40, net_profit:  73.08, status: 'EXECUTED', ws_received_at: tsAt(393), decision_at: tsAt(393), latency_ms: 59.3, executed_at: tsAt(393) },
 ]
 
 // 100 P&L points over 8 hours, cumulative curve from 0 to ~847
@@ -678,7 +124,6 @@ export const PNL_SERIES: PnlPoint[] = (() => {
   const totalPoints = 100
   let cumulative = 0
 
-  // Net P&Ls from trades spread across 8h for realistic curve
   const checkpoints: [number, number][] = [
     [0.05, 0],
     [0.08, 47],
@@ -709,7 +154,6 @@ export const PNL_SERIES: PnlPoint[] = (() => {
     const frac = i / (totalPoints - 1)
     const timeMs = startMs + frac * eightHoursMs
 
-    // Interpolate between checkpoints
     while (
       checkIdx < checkpoints.length - 2 &&
       frac > checkpoints[checkIdx + 1][0]
@@ -719,7 +163,6 @@ export const PNL_SERIES: PnlPoint[] = (() => {
     const [f0, v0] = checkpoints[checkIdx]
     const [f1, v1] = checkpoints[Math.min(checkIdx + 1, checkpoints.length - 1)]
     const t = f1 === f0 ? 1 : (frac - f0) / (f1 - f0)
-    // Small noise for realism
     const noise = (Math.sin(i * 2.7) * 4 + Math.cos(i * 1.3) * 3)
     cumulative = Math.max(0, v0 + t * (v1 - v0) + noise)
 
@@ -739,5 +182,5 @@ export const METRICS: Metrics = {
   p95_latency_ms: 47,
   circuit_breaker: 'CLOSED',
   bot_active: true,
-  exchanges_connected: ['Binance', 'Kraken', 'Coinbase'],
+  exchanges_connected: ['binance', 'kraken', 'coinbase'],
 }

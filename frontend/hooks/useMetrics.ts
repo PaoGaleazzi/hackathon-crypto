@@ -78,7 +78,9 @@ export function useMetrics(): PolledData {
 
       const bestSpread =
         resolvedOpps.length > 0
-          ? Math.max(...resolvedOpps.map(o => o.spread_pct))
+          ? Math.max(...resolvedOpps.map(o =>
+              o.buy_ask > 0 ? (o.sell_bid - o.buy_ask) / o.buy_ask * 100 : 0
+            ))
           : 0
 
       const metrics: Metrics = {

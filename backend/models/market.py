@@ -32,6 +32,39 @@ class BBO(BaseModel):
         return v
 
 
+class OrderBookLevel(BaseModel):
+    price: float
+    qty: float
+
+    model_config = {"frozen": True}
+
+    @field_validator("price", "qty")
+    @classmethod
+    def must_be_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"price/qty must be positive, got {v}")
+        return v
+
+
+class OrderBook(BaseModel):
+    """Top-N order book depth. bids descending by price, asks ascending — best first."""
+    exchange: Exchange
+    bids: list[OrderBookLevel]
+    asks: list[OrderBookLevel]
+    ws_received_at: datetime
+    normalized_at: datetime | None = None
+
+    model_config = {"frozen": True}
+
+    @property
+    def best_bid(self) -> float | None:
+        return self.bids[0].price if self.bids else None
+
+    @property
+    def best_ask(self) -> float | None:
+        return self.asks[0].price if self.asks else None
+
+
 class Opportunity(BaseModel):
     buy_exchange: Exchange
     sell_exchange: Exchange
