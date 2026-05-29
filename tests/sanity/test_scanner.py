@@ -53,10 +53,16 @@ def test_scan_returns_empty_when_spread_positive_but_fees_dominate():
 
 def test_scan_detects_profitable_opportunity_known_answer():
     # buy BINANCE ask=70_000, sell KRAKEN bid=70_500, qty=min(1.0, 0.8)=0.8
-    # gross   = (70_500 - 70_000) * 0.8 = 400.0
-    # fee_buy = 0.8 * 70_000 * 0.001   =  56.0
-    # fee_sell= 0.8 * 70_500 * 0.0026  = 146.64
-    # net     = 400.0 - 56.0 - 146.64  = 197.36
+    # scanner passes depth_qty so calculate_net_spread includes all 4 cost components:
+    #   gross        = (70_500 - 70_000) * 0.8                               = 400.0
+    #   fee_buy      = 0.8 * 70_000 * 0.001                                  =  56.0
+    #   fee_sell     = 0.8 * 70_500 * 0.0026                                 = 146.64
+    #   withdrawal   = 0.0005 * 70_000                                        =  35.0
+    #   slippage_buy = 0.001 * sqrt(0.8/1.0) * 0.8 * 70_000                 ≈  50.09
+    #   slippage_sell= 0.001 * sqrt(0.8/0.8) * 0.8 * 70_500                 ≈  56.40
+    #   latency_buy  ≈ 0.8 * 70_000 * vol_per_ms * 5ms                      ≈   1.26
+    #   latency_sell ≈ 0.8 * 70_500 * vol_per_ms * 50ms                     ≈  12.70
+    #   net ≈ 400 - 56 - 146.64 - 35 - 50.09 - 56.40 - 1.26 - 12.70       ≈  41.91
     state = {
         Exchange.BINANCE: _bbo(Exchange.BINANCE, bid=69_900.0, ask=70_000.0, ask_qty=1.0),
         Exchange.KRAKEN:  _bbo(Exchange.KRAKEN,  bid=70_500.0, ask=71_000.0, bid_qty=0.8),
@@ -64,7 +70,7 @@ def test_scan_detects_profitable_opportunity_known_answer():
     opps = scan_for_opportunities(state)
     assert len(opps) == 1
     opp = opps[0]
-    assert opp.net_spread == pytest.approx(197.36)
+    assert opp.net_spread == pytest.approx(41.906838150415346, rel=1e-4)
     assert opp.gross_spread == pytest.approx(400.0)
     assert opp.available_qty == pytest.approx(0.8)
 

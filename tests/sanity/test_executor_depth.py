@@ -118,9 +118,11 @@ def test_depth_partial_fill_when_buy_depth_thin(mock_db):
 
 def test_depth_partial_fill_limited_by_thinner_leg(mock_db):
     # buy can do 0.5 but sell only 0.15 → exec 0.15
+    # NOTE: sell price 72_000 ensures net spread > 0 after fixed withdrawal cost
+    # (the ~35 USDT Binance withdrawal fee swamps profit at 70_500 for qty=0.15)
     books = _books(
         buy_asks=_levels((70_000.0, 0.5)),
-        sell_bids=_levels((70_500.0, 0.15)),
+        sell_bids=_levels((72_000.0, 0.15)),
     )
     trade = simulate_execution_depth(_opp(), 0.5, _wallets(), books, now=_NOW)
     assert trade.qty == pytest.approx(0.15)

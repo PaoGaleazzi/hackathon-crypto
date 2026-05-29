@@ -87,21 +87,27 @@ def test_execute_returns_executed_status(mock_db):
 
 
 def test_execute_net_profit_known_answer(mock_db):
-    # buy BINANCE ask=70_000, sell KRAKEN bid=70_500, qty=0.5
-    # fee_buy  = 0.5 * 70_000 * 0.001  =  35.0
-    # fee_sell = 0.5 * 70_500 * 0.0026 =  91.65
-    # net_profit = 250.0 - 35.0 - 91.65 = 123.35
+    # buy BINANCE ask=70_000, sell KRAKEN bid=70_500, qty=0.5; BBO ask_qty=bid_qty=2.0
+    # gross        = (70_500 - 70_000) * 0.5                              = 250.0
+    # fee_buy      = 0.5 * 70_000 * 0.001                                 =  35.0
+    # fee_sell     = 0.5 * 70_500 * 0.0026                                =  91.65
+    # withdrawal   = 0.0005 * 70_000                                       =  35.0
+    # slippage_buy = 0.001 * sqrt(0.5/2.0) * 0.5 * 70_000                =  17.5
+    # slippage_sell= 0.001 * sqrt(0.5/2.0) * 0.5 * 70_500                =  17.625
+    # latency_buy  ≈ 0.5 * 70_000 * vol_per_ms * 5ms                     ≈   0.789
+    # latency_sell ≈ 0.5 * 70_500 * vol_per_ms * 50ms                    ≈   7.940
+    # net ≈ 250 - 35 - 91.65 - 35 - 17.5 - 17.625 - 0.789 - 7.940      ≈  44.50
     trade = simulate_execution(_opp(), 0.5, _wallets(), _current_bbo(), now=_NOW)
-    assert trade.net_profit == pytest.approx(123.35)
+    assert trade.net_profit == pytest.approx(44.496725529006646, rel=1e-4)
 
 
 def test_execute_updates_buy_wallet(mock_db):
-    # cost_usdt = 70_000 * 0.5 + fee_buy(35.0) = 35_035.0
-    # wallet_buy.usdt after = 100_000 - 35_035 = 64_965
+    # cost_usdt = 70_000 * 0.5 + fee_buy(35.0) + withdrawal(35.0) = 35_070.0
+    # wallet_buy.usdt after = 100_000 - 35_070 = 64_930
     # wallet_buy.btc after  = 0 + 0.5 = 0.5
     wallets = _wallets()
     simulate_execution(_opp(), 0.5, wallets, _current_bbo(), now=_NOW)
-    assert wallets[Exchange.BINANCE].usdt == pytest.approx(64_965.0)
+    assert wallets[Exchange.BINANCE].usdt == pytest.approx(64_930.0)
     assert wallets[Exchange.BINANCE].btc == pytest.approx(0.5)
 
 

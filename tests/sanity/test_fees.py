@@ -59,11 +59,15 @@ def test_calculate_fee_raises_on_negative_price():
 
 
 # ── calculate_net_spread: known-answer cases ──────────────────────────────────
-# buy BINANCE ask=70_000, sell KRAKEN bid=70_500, qty=1.0
-#   gross   = (70_500 - 70_000) * 1.0       =  500.0
-#   fee_buy = 1.0 * 70_000 * 0.001          =   70.0   (Binance taker)
-#   fee_sell= 1.0 * 70_500 * 0.0026         =  183.3   (Kraken taker)
-#   net     = 500.0 - 70.0 - 183.3          =  246.7
+# buy BINANCE ask=70_000, sell KRAKEN bid=70_500, qty=1.0, no depth_qty
+#   gross        = (70_500 - 70_000) * 1.0                              =  500.0
+#   fee_buy      = 1.0 * 70_000 * 0.001 (Binance taker)                =   70.0
+#   fee_sell     = 1.0 * 70_500 * 0.0026 (Kraken taker)                =  183.3
+#   withdrawal   = 0.0005 * 70_000 (Binance BTC network fee)           =   35.0
+#   slippage     = 0 (no depth_qty supplied)
+#   latency_buy  ≈ 1.0 * 70_000 * (0.80/√(365*24*3600*1000)) * 5ms   ≈    1.58
+#   latency_sell ≈ 1.0 * 70_500 * (0.80/√(365*24*3600*1000)) * 50ms  ≈   15.87
+#   net ≈ 500.0 - 70.0 - 183.3 - 35.0 - 1.58 - 15.87                 ≈  194.24
 
 def test_calculate_net_spread_positive_case():
     result = calculate_net_spread(
@@ -73,7 +77,7 @@ def test_calculate_net_spread_positive_case():
         sell_bid=70_500.0,
         qty=1.0,
     )
-    assert result == pytest.approx(246.7)
+    assert result == pytest.approx(194.2434510580133, rel=1e-4)
 
 
 def test_calculate_net_spread_negative_when_spread_too_small():
