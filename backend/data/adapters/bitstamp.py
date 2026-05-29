@@ -10,7 +10,9 @@ import orjson
 import websockets
 
 import data.bbo_state as bbo_state
-from data.normalizer import normalize_bitstamp_bbo
+from core.liquidity_health import get_liquidity_monitor
+from data.normalizer import normalize_bitstamp_bbo, normalize_bitstamp_depth
+from models.market import Exchange
 
 logger = logging.getLogger(__name__)
 
@@ -49,5 +51,40 @@ async def run() -> None:
             raise
         except Exception as exc:
             logger.warning("Bitstamp WS error: %s — reconnecting in %ds", exc, backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _MAX_BACKOFF_S)
+
+
+async def run_depth() -> None:
+    """Connect to Bitstamp order_book_btcusd and update the liquidity monitor.
+
+    Reuses the BBO subscription (full top-100 snapshot per message); the depth
+    normalizer keeps the top 10 asks. Separate connection from run() so the
+    hot-path BBO stream is never blocked by depth parsing.
+    """
+    backoff = 1
+    monitor = get_liquidity_monitor()
+    while True:
+        try:
+            async with websockets.connect(_URL) as ws:
+                await ws.send(_SUBSCRIBE_MSG)
+                logger.info("Bitstamp depth WS connected and subscribed")
+                backoff = 1
+                async for raw_msg in ws:
+                    try:
+                        data = orjson.loads(raw_msg)
+                    except orjson.JSONDecodeError:
+                        logger.warning("Bitstamp depth: malformed JSON, skipping")
+                        continue
+
+                    asks = normalize_bitstamp_depth(data)
+                    if asks is not None:
+                        monitor.update(Exchange.BITSTAMP, asks)
+
+        except asyncio.CancelledError:
+            logger.info("Bitstamp depth WS adapter stopped")
+            raise
+        except Exception as exc:
+            logger.warning("Bitstamp depth WS error: %s — reconnecting in %ds", exc, backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, _MAX_BACKOFF_S)
