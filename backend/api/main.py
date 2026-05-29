@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import circuit_breaker, health, metrics, opportunities, trades, triangular
+from api.routes import circuit_breaker, health, metrics, opportunities, rebalance, trades, triangular
 from config import settings
 from core import scanner
 from core.allocator import (
@@ -25,7 +25,7 @@ from core.allocator import (
 from core.circuit_breaker import get_circuit_breaker
 from core.executor import build_rejected_trade, simulate_execution
 from core.fees import OrderSide, calculate_fee, estimate_slippage
-from core.rebalancer import RebalancePlan, plan_rebalance
+from core.rebalancer import RebalancePlan, plan_rebalance, set_latest_plan
 from core.risk_buffer import K_DEFAULT_95, passes_latency_buffer
 from core.stat_arb import get_stat_arb_detector, signal_to_dict
 from core.triangular import detect_triangular, set_latest_opportunities, triangular_to_dict
@@ -169,8 +169,9 @@ def _representative_btc_price(bbo_state: dict[Exchange, BBO]) -> float:
     return sum(mids) / len(mids)
 
 
-def _rebalance_to_dict(plan: RebalancePlan) -> dict:
-    """JSON-serializable view for the `rebalance` WS broadcast."""
+def _rebalance_to_dict(plan: RebalancePlan, computed_at: datetime | None = None) -> dict:
+    """JSON-serializable view for the `rebalance` WS broadcast. Shape matches
+    GET /api/rebalance, including `computed_at` so the client timestamp is exact."""
     return {
         "status": plan.status,
         "total_cost_usd": plan.total_cost_usd,
@@ -185,6 +186,7 @@ def _rebalance_to_dict(plan: RebalancePlan) -> dict:
             }
             for t in plan.transfers
         ],
+        "computed_at": computed_at.isoformat() if computed_at is not None else None,
     }
 
 
@@ -367,13 +369,14 @@ async def _pipeline_loop() -> None:
                     _representative_btc_price(bbo_state),
                     _REBALANCE_BAND,
                 )
+                set_latest_plan(plan, decision_at)
                 if plan.status == "OK":
                     logger.info(
                         "REBALANCE %d transfers | cost=$%.2f",
                         len(plan.transfers), plan.total_cost_usd,
                     )
                     await _ws_manager.broadcast(json.dumps(
-                        {"type": "rebalance", "data": _rebalance_to_dict(plan)}
+                        {"type": "rebalance", "data": _rebalance_to_dict(plan, decision_at)}
                     ))
 
         except asyncio.CancelledError:
@@ -496,8 +499,11 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(kraken.run(), name="kraken-ws"),
         asyncio.create_task(kraken.run_depth(), name="kraken-depth"),
         asyncio.create_task(okx.run(), name="okx-ws"),
+        asyncio.create_task(okx.run_depth(), name="okx-depth"),
         asyncio.create_task(coinbase.run(), name="coinbase-ws"),
+        asyncio.create_task(coinbase.run_depth(), name="coinbase-depth"),
         asyncio.create_task(bybit.run(), name="bybit-ws"),
+        asyncio.create_task(bybit.run_depth(), name="bybit-depth"),
         asyncio.create_task(bitstamp.run(), name="bitstamp-ws"),
         asyncio.create_task(gemini.run(), name="gemini-ws"),
         asyncio.create_task(_pipeline_loop(), name="pipeline"),
@@ -541,6 +547,7 @@ app.include_router(trades.router, prefix="/api")
 app.include_router(metrics.router, prefix="/api")
 app.include_router(circuit_breaker.router, prefix="/api")
 app.include_router(triangular.router, prefix="/api")
+app.include_router(rebalance.router, prefix="/api")
 
 
 @app.websocket("/ws/live")

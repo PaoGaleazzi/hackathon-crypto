@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-05-29 (Bybit depth)
+- feat(bybit): `run_depth()` suscribe a `orderbook.10.BTCUSDT`. `normalize_bybit_depth`
+  maneja snapshot (clear + rebuild desde `data.a`) y delta (deltas qty=0→remove).
+  Estado `asks_book` en-memoria, reset por reconexión. Registrado como `"bybit-depth"`.
+  Monitor cubre ahora Binance, Kraken, OKX, Coinbase, Bybit.
+- 249/249 tests verdes.
+
+## 2026-05-29 (Coinbase depth)
+- feat(coinbase): `run_depth()` suscribe al canal `level2`. `normalize_coinbase_depth`
+  maneja snapshot (clear + rebuild desde `asks[]`) y l2update (deltas `side="sell"` en
+  `changes[]`). Estado `asks_book` en-memoria, reset por reconexión. Registrado en
+  lifespan como `"coinbase-depth"`. Monitor cubre ahora Binance, Kraken, OKX, Coinbase.
+- 46/46 tests verdes.
+
+## 2026-05-29 (rebalance plan en dashboard)
+- feat(api): `GET /api/rebalance` — último plan de rebalanceo desde un cache en memoria
+  (`set_latest_plan`/`get_latest_plan` en `core/rebalancer.py`, mismo patrón que triangular).
+  Devuelve `status` (OK/BALANCED/INFEASIBLE/NONE), `total_cost_usd`, `transfers[]` y
+  `computed_at` ISO. El pipeline escribe el plan cada `_REBALANCE_EVERY_N_TRADES`; "NONE"
+  hasta el primer cálculo. Router en `api/routes/rebalance.py`, montado con prefix `/api`.
+- feat(frontend): hook `useRebalance` (poll `/api/rebalance` cada 2s + WS `rebalance`) y
+  `PendingPlanPanel` dentro de `RebalanceStatus`: lista las transferencias recomendadas
+  (asset, from→to, amount, fee), costo estimado en USD y botón "Apply Rebalance" SOLO
+  visual (no ejecuta nada). Se muestra solo cuando `status==='OK'` con transfers. La grid
+  de deviation por exchange existente queda intacta.
+- test: 46/46 backend verdes; `tsc --noEmit` y eslint limpios en los archivos nuevos.
+
+## 2026-05-29 (OKX depth)
+- feat(okx): `run_depth()` suscribe al canal `books5` de OKX v5. `normalize_okx_depth`
+  extrae asks `[price, qty, ...]` del snapshot completo (books5 no hace updates
+  incrementales, no requiere estado). Registrado en lifespan como `"okx-depth"`.
+- 46/46 tests verdes.
+
+## 2026-05-29 (Kraken depth + degraded_liquidity en dashboard)
+- feat(kraken): `run_depth()` suscribe al canal `book` depth=10 de Kraken v2. Mantiene
+  estado en-memoria `asks_book/bids_book` (reset en cada reconexión). `normalize_kraken_depth`
+  maneja snapshot (clear + rebuild) y updates (deltas qty=0→remove), retorna top-10 asks
+  ordenados. Alimenta `monitor.update(KRAKEN, asks)` en cada mensaje.
+- feat(api): `GET /api/opportunities` ahora incluye `degraded_liquidity: bool` por row,
+  computado en query-time desde el monitor (refleja estado *actual* del libro, no histórico).
+- feat(frontend): `Opportunity.degraded_liquidity?: boolean` en el tipo. La columna ROUTE
+  muestra ⚠️ con `title="Liquidez fragmentada detectada"` cuando el flag está activo.
+- refactor(main): `kraken-depth` registrado como task en lifespan.
+- 46/46 tests verdes.
+
 ## 2026-05-29 (variance inflation + rebalancer wiring)
 - feat(allocator): la diagonal de la covarianza ahora es `σ_i² = r_i² / P_fill_i`
   (antes `r_i²`). El factor 1/P_fill infla el riesgo percibido de opps stale, que ya

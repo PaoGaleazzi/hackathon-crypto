@@ -122,6 +122,15 @@ export function OpportunitiesTable({ opportunities }: OpportunitiesTableProps) {
                     {fmtEx(opp.buy_exchange)}
                     <span className="text-gray-500 mx-1">→</span>
                     {fmtEx(opp.sell_exchange)}
+                    {opp.degraded_liquidity && (
+                      <span
+                        title="Liquidez fragmentada detectada"
+                        className="ml-1.5 align-middle cursor-help"
+                        aria-label="Liquidez fragmentada detectada"
+                      >
+                        ⚠️
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className={`text-sm text-right font-mono ${spreadColor(spreadPct)}`}>
                     {spreadPct.toFixed(2)}%

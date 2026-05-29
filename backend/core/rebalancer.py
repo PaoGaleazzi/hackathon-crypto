@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 
 import numpy as np
@@ -180,3 +181,21 @@ def plan_rebalance(
     total_cost = sum(t.fee_usd for t in all_transfers)
     status = "OK" if all_transfers else "BALANCED"
     return RebalancePlan(transfers=all_transfers, total_cost_usd=total_cost, status=status)
+
+
+# ── in-memory latest-plan cache ──────────────────────────────────────────────────
+# The pipeline writes the most recent plan here every N executed trades; GET
+# /api/rebalance reads it. Advisory only — transfers are never auto-executed.
+
+_latest_plan: RebalancePlan | None = None
+_latest_computed_at: datetime | None = None
+
+
+def set_latest_plan(plan: RebalancePlan, computed_at: datetime) -> None:
+    global _latest_plan, _latest_computed_at
+    _latest_plan = plan
+    _latest_computed_at = computed_at
+
+
+def get_latest_plan() -> tuple[RebalancePlan | None, datetime | None]:
+    return _latest_plan, _latest_computed_at

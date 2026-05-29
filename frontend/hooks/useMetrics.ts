@@ -21,6 +21,7 @@ interface PolledData {
   latencySampleCount: number
   latencyP50Ms: number
   latencyP95Ms: number
+  uptimeS: number
 }
 
 interface StatusResponse {
@@ -70,6 +71,7 @@ export function useMetrics(): PolledData {
     latencySampleCount: 0,
     latencyP50Ms: 0,
     latencyP95Ms: 0,
+    uptimeS: 0,
   })
 
   useEffect(() => {
@@ -120,6 +122,7 @@ export function useMetrics(): PolledData {
         latencySampleCount: latency?.sample_count ?? 0,
         latencyP50Ms: latency?.p50_ms ?? 0,
         latencyP95Ms: latency?.p95_ms ?? 0,
+        uptimeS: status.uptime_s ?? 0,
       })
     }
 

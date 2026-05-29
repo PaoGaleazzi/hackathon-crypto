@@ -186,6 +186,60 @@ def normalize_coinbase_bbo(raw: dict, received_at: datetime) -> BBO | None:
     )
 
 
+def normalize_coinbase_depth(
+    raw: dict,
+    asks_book: dict[float, float],
+) -> list[OrderBookLevel] | None:
+    """Apply a Coinbase level2 snapshot or l2update to the in-memory ask book.
+
+    snapshot — full book: {"type": "snapshot", "asks": [["price", "qty"], ...], ...}
+    l2update — delta:     {"type": "l2update",  "changes": [["sell", "price", "qty"], ...], ...}
+
+    qty == "0" on an l2update means remove that price level.
+    asks_book is mutated in place; callers should clear it on reconnect.
+    Returns the current best 10 asks (ascending by price), or None when the
+    message is not a level2 message or the book is empty after applying the update.
+    """
+    msg_type = raw.get("type")
+
+    if msg_type == "snapshot":
+        asks_book.clear()
+        try:
+            for price_str, qty_str in raw.get("asks", []):
+                price, qty = float(price_str), float(qty_str)
+                if qty > 0:
+                    asks_book[price] = qty
+        except (ValueError, TypeError) as exc:
+            logger.warning("Coinbase depth snapshot: parse error %s", exc)
+            return None
+
+    elif msg_type == "l2update":
+        if raw.get("product_id") != "BTC-USD":
+            return None
+        try:
+            for change in raw.get("changes", []):
+                side, price_str, qty_str = change
+                if side != "sell":
+                    continue
+                price, qty = float(price_str), float(qty_str)
+                if qty <= 0:
+                    asks_book.pop(price, None)
+                else:
+                    asks_book[price] = qty
+        except (ValueError, TypeError) as exc:
+            logger.warning("Coinbase depth l2update: parse error %s", exc)
+            return None
+
+    else:
+        return None
+
+    if not asks_book:
+        return None
+
+    top_asks = sorted(asks_book.items())[:10]
+    return [OrderBookLevel(price=p, qty=q) for p, q in top_asks]
+
+
 def normalize_gemini_bbo(
     raw: dict,
     bids: dict[str, float],
@@ -328,6 +382,47 @@ def normalize_bybit_bbo(raw: dict, received_at: datetime) -> BBO | None:
     )
 
 
+def normalize_bybit_depth(
+    raw: dict,
+    asks_book: dict[float, float],
+) -> list[OrderBookLevel] | None:
+    """Apply a Bybit orderbook.10 snapshot or delta to the in-memory ask book.
+
+    snapshot — full book: {"type": "snapshot", "data": {"a": [["price","qty"],...], ...}}
+    delta    — increments: {"type": "delta",    "data": {"a": [["price","qty"],...], ...}}
+
+    qty == "0" on a delta means remove that price level.
+    asks_book is mutated in place; callers should clear it on reconnect.
+    Returns the current best 10 asks (ascending by price), or None when the
+    message is not an orderbook.10.BTCUSDT message or the book is empty.
+    """
+    if raw.get("topic") != "orderbook.10.BTCUSDT":
+        return None
+    msg_type = raw.get("type")
+    if msg_type not in ("snapshot", "delta"):
+        return None
+
+    if msg_type == "snapshot":
+        asks_book.clear()
+
+    try:
+        for price_str, qty_str in raw.get("data", {}).get("a", []):
+            price, qty = float(price_str), float(qty_str)
+            if qty <= 0:
+                asks_book.pop(price, None)
+            else:
+                asks_book[price] = qty
+    except (ValueError, TypeError) as exc:
+        logger.warning("Bybit depth: parse error %s — raw: %s", exc, raw)
+        return None
+
+    if not asks_book:
+        return None
+
+    top_asks = sorted(asks_book.items())[:10]
+    return [OrderBookLevel(price=p, qty=q) for p, q in top_asks]
+
+
 def normalize_okx_bbo(raw: dict, received_at: datetime) -> BBO | None:
     """Parse OKX v5 tickers WS message into BBO. Discards subscription confirms and errors."""
     if "event" in raw:
@@ -358,3 +453,32 @@ def normalize_okx_bbo(raw: dict, received_at: datetime) -> BBO | None:
         ws_received_at=received_at,
         normalized_at=datetime.now(timezone.utc),
     )
+
+
+def normalize_okx_depth(raw: dict) -> list[OrderBookLevel] | None:
+    """Parse an OKX books5 snapshot into a sorted ask list (ascending price).
+
+    OKX books5 always delivers full 5-level snapshots — no incremental state needed.
+    Each ask entry is [price_str, qty_str, deprecated_str, num_orders_str].
+    Subscription confirms and errors have an "event" key and are discarded.
+    """
+    if "event" in raw:
+        return None
+    if raw.get("arg", {}).get("channel") != "books5":
+        return None
+
+    try:
+        data = raw["data"][0]
+        asks = [
+            OrderBookLevel(price=float(level[0]), qty=float(level[1]))
+            for level in data["asks"]
+            if float(level[1]) > 0
+        ]
+    except (KeyError, IndexError, ValueError, TypeError) as exc:
+        logger.warning("OKX depth: parse error %s — raw: %s", exc, raw)
+        return None
+
+    if not asks:
+        return None
+
+    return sorted(asks, key=lambda l: l.price)

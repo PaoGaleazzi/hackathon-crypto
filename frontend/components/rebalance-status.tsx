@@ -1,9 +1,25 @@
 'use client'
 
 import type { Trade } from '@/lib/mock-data'
+import type { RebalancePlan } from '@/hooks/useRebalance'
 
 interface Props {
   trades: Trade[]
+  plan?: RebalancePlan | null
+}
+
+const EXCHANGE_LABELS: Record<string, string> = {
+  binance: 'Binance',
+  kraken: 'Kraken',
+  coinbase: 'Coinbase',
+  okx: 'OKX',
+  bybit: 'Bybit',
+  bitstamp: 'Bitstamp',
+  gemini: 'Gemini',
+}
+
+function exLabel(key: string): string {
+  return EXCHANGE_LABELS[key] ?? key
 }
 
 const EXCHANGES = ['binance', 'kraken', 'coinbase', 'okx'] as const
@@ -97,7 +113,65 @@ function DevLabel({ pct }: { pct: number }) {
   )
 }
 
-export function RebalanceStatus({ trades }: Props) {
+function PendingPlanPanel({ plan }: { plan: RebalancePlan }) {
+  return (
+    <div
+      className="rounded-lg border p-4 mb-4"
+      style={{ background: '#0d1420', borderColor: '#1e3a5f' }}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full" style={{ background: '#3b82f6' }} />
+          <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#60a5fa' }}>
+            Rebalance plan pending
+          </span>
+          <span className="text-[10px] text-gray-500">
+            {plan.n_transfers} transfer{plan.n_transfers > 1 ? 's' : ''}
+          </span>
+        </div>
+        <span className="text-xs font-mono text-gray-400">
+          est. cost{' '}
+          <span className="font-semibold text-gray-200">
+            ${plan.total_cost_usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        </span>
+      </div>
+
+      <div className="space-y-1.5 mb-3">
+        {plan.transfers.map((t, i) => (
+          <div
+            key={`${t.asset}-${t.from}-${t.to}-${i}`}
+            className="flex items-center justify-between text-xs font-mono rounded px-2.5 py-1.5"
+            style={{ background: '#0a0f18' }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 w-9">{t.asset}</span>
+              <span className="text-gray-300">{exLabel(t.from)}</span>
+              <span className="text-blue-400">→</span>
+              <span className="text-gray-300">{exLabel(t.to)}</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-gray-200">{t.amount.toFixed(t.asset === 'BTC' ? 4 : 0)}</span>
+              <span className="text-gray-600">${t.fee_usd.toFixed(2)} fee</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Visual only — does not execute transfers. */}
+      <button
+        type="button"
+        title="Visual only — does not execute transfers"
+        className="w-full rounded-md py-2 text-xs font-semibold uppercase tracking-wide transition-colors"
+        style={{ background: '#1d4ed8', color: '#dbeafe' }}
+      >
+        Apply Rebalance
+      </button>
+    </div>
+  )
+}
+
+export function RebalanceStatus({ trades, plan }: Props) {
   const states = computeState(trades)
   const worstTier = states.some(s => s.tier === 'red')
     ? 'red'
@@ -116,13 +190,27 @@ export function RebalanceStatus({ trades }: Props) {
         <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wide">
           Rebalance Status
         </h3>
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full" style={{ background: overallColors.dot }} />
-          <span className="text-xs font-semibold" style={{ color: overallColors.text }}>
-            {needCount === 0 ? 'All balanced' : `${needCount} exchange${needCount > 1 ? 's' : ''} need rebalancing`}
-          </span>
+        <div className="flex items-center gap-3">
+          {plan?.status === 'OK' && plan.transfers.length > 0 && (
+            <span
+              className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+              style={{ background: '#1a1505', color: '#fbbf24', border: '1px solid #78350f' }}
+            >
+              Rebalance Suggested
+            </span>
+          )}
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full" style={{ background: overallColors.dot }} />
+            <span className="text-xs font-semibold" style={{ color: overallColors.text }}>
+              {needCount === 0 ? 'All balanced' : `${needCount} exchange${needCount > 1 ? 's' : ''} need rebalancing`}
+            </span>
+          </div>
         </div>
       </div>
+
+      {plan?.status === 'OK' && plan.transfers.length > 0 && (
+        <PendingPlanPanel plan={plan} />
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {states.map(s => {

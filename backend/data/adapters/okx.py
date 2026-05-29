@@ -10,7 +10,9 @@ import orjson
 import websockets
 
 import data.bbo_state as bbo_state
-from data.normalizer import normalize_okx_bbo
+from core.liquidity_health import get_liquidity_monitor
+from data.normalizer import normalize_okx_bbo, normalize_okx_depth
+from models.market import Exchange
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,10 @@ _URL = "wss://ws.okx.com:8443/ws/v5/public"
 _SUBSCRIBE_MSG = json.dumps({
     "op": "subscribe",
     "args": [{"channel": "tickers", "instId": "BTC-USDT"}],
+})
+_DEPTH_SUBSCRIBE_MSG = json.dumps({
+    "op": "subscribe",
+    "args": [{"channel": "books5", "instId": "BTC-USDT"}],
 })
 _MAX_BACKOFF_S = 60
 
@@ -55,5 +61,39 @@ async def run() -> None:
             raise
         except Exception as exc:
             logger.warning("OKX WS error: %s — reconnecting in %ds", exc, backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _MAX_BACKOFF_S)
+
+
+async def run_depth() -> None:
+    """Connect to OKX books5 stream and update the liquidity monitor."""
+    backoff = 1
+    monitor = get_liquidity_monitor()
+    while True:
+        try:
+            async with websockets.connect(_URL) as ws:
+                await ws.send(_DEPTH_SUBSCRIBE_MSG)
+                logger.info("OKX depth WS connected and subscribed")
+                backoff = 1
+                async for raw_msg in ws:
+                    if raw_msg == "ping":
+                        await ws.send("pong")
+                        continue
+
+                    try:
+                        data = orjson.loads(raw_msg)
+                    except orjson.JSONDecodeError:
+                        logger.warning("OKX depth: malformed JSON, skipping")
+                        continue
+
+                    asks = normalize_okx_depth(data)
+                    if asks is not None:
+                        monitor.update(Exchange.OKX, asks)
+
+        except asyncio.CancelledError:
+            logger.info("OKX depth WS adapter stopped")
+            raise
+        except Exception as exc:
+            logger.warning("OKX depth WS error: %s — reconnecting in %ds", exc, backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, _MAX_BACKOFF_S)

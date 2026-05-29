@@ -19,12 +19,17 @@ import type { Metrics } from '@/lib/mock-data'
 import { useArbitrageData } from '@/hooks/useArbitrageData'
 import { useMetrics } from '@/hooks/useMetrics'
 import { useTriangular } from '@/hooks/useTriangular'
+import { useRebalance } from '@/hooks/useRebalance'
+import { useSystemHealth } from '@/hooks/useSystemHealth'
+import { SystemHealthPanel } from '@/components/system-health-panel'
 import { Separator } from '@/components/ui/separator'
 
 export default function Page() {
   const ws = useArbitrageData()
   const rest = useMetrics()
   const triangularOpps = useTriangular()
+  const rebalancePlan = useRebalance()
+  const systemHealth = useSystemHealth()
   const [activeView, setActiveView] = useState('dashboard')
   const [cbOverride, setCbOverride] = useState<'OPEN' | 'CLOSED' | null>(null)
   const [presentationMode, setPresentationMode] = useState(false)
@@ -98,13 +103,15 @@ export default function Page() {
   }, [opportunities, ws.btcPrices])
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: '#0a0e1a' }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: presentationMode ? '#020408' : '#0a0e1a' }}>
       {!presentationMode && (
         <Sidebar
           activeView={activeView}
           onNavigate={setActiveView}
           circuitBreaker={cbState}
           botActive={metrics.bot_active}
+          connected={ws.connected}
+          uptimeS={rest.uptimeS}
         />
       )}
 
@@ -178,8 +185,15 @@ export default function Page() {
                 <WalletBalances trades={trades} />
               </div>
 
-              {/* Rebalance status */}
-              <RebalanceStatus trades={trades} />
+              {/* System health + Rebalance status side by side on large screens */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <SystemHealthPanel
+                  health={systemHealth}
+                  tradesExecuted={trades.filter(t => t.status === 'EXECUTED').length}
+                  p50Ms={rest.latencyP50Ms}
+                />
+                <RebalanceStatus trades={trades} plan={rebalancePlan} />
+              </div>
             </div>
           )}
 
