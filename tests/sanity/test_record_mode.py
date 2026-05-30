@@ -105,6 +105,13 @@ def test_make_config_coerces_types():
     assert cfg.stale_quote_ms is None
 
 
+def test_make_config_coerces_cost_model_knobs():
+    ab = _load_ab_test()
+    cfg = ab.make_config("B", ["fee_multiplier=0.5", "include_withdrawal=false"])
+    assert cfg.fee_multiplier == 0.5
+    assert cfg.include_withdrawal is False
+
+
 def test_make_config_rejects_unknown_knob():
     ab = _load_ab_test()
     with pytest.raises(SystemExit):

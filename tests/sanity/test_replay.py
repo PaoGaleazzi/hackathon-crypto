@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import core.fees as fees_module
 from core.replay import (
+    ReplayStats,
     RunConfig,
     TickRecorder,
     load_ticks,
@@ -152,6 +154,45 @@ def test_enable_microprice_toggle_runs_and_is_deterministic():
     # Disabling the signal is deterministic across runs.
     again = run_replay(ticks, _cfg(enable_microprice=False))
     assert [t.net_profit for t in off] == [t.net_profit for t in again]
+
+
+def test_run_replay_collects_funnel_stats():
+    ticks = _arb_dataset(8)
+    stats = ReplayStats()
+    trades = run_replay(ticks, _cfg(), stats=stats)
+    executed = [t for t in trades if t.status == "EXECUTED"]
+    # The funnel is internally consistent with the returned trades.
+    assert stats.ticks == len(ticks)
+    assert stats.state_ready <= stats.ticks
+    assert stats.executed == len(executed)
+    assert stats.opportunities_detected >= stats.passed_min_spread >= stats.sized_ok
+    assert "EXECUTED" in stats.funnel()
+
+
+def test_fee_multiplier_zero_beats_full_fees_on_pnl():
+    ticks = _arb_dataset(8)
+    full = run_replay(ticks, _cfg(fee_multiplier=1.0))
+    free = run_replay(ticks, _cfg(fee_multiplier=0.0))
+    pnl_full = sum(t.net_profit for t in full if t.status == "EXECUTED")
+    pnl_free = sum(t.net_profit for t in free if t.status == "EXECUTED")
+    # Removing fees cannot lower per-trade profit.
+    assert pnl_free >= pnl_full
+
+
+def test_cost_model_override_restores_fee_tables():
+    fees_before = fees_module._FEE_RATES
+    wd_before = fees_module._WITHDRAWAL_FEES_BTC
+    run_replay(_arb_dataset(4), _cfg(fee_multiplier=0.25, include_withdrawal=False))
+    # The module-level tables are the very same objects after the run.
+    assert fees_module._FEE_RATES is fees_before
+    assert fees_module._WITHDRAWAL_FEES_BTC is wd_before
+
+
+def test_default_run_replay_does_not_touch_fee_tables():
+    # fee_multiplier=1.0 + include_withdrawal=True is a no-op: identity preserved.
+    fees_before = fees_module._FEE_RATES
+    run_replay(_arb_dataset(4), _cfg())
+    assert fees_module._FEE_RATES is fees_before
 
 
 def test_settings_override_is_restored_after_run():

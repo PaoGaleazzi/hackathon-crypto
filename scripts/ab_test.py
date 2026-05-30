@@ -19,7 +19,17 @@ latency p50/p95, trades executed).
 Any RunConfig knob is overridable: enable_microprice, apply_latency_buffer,
 min_net_spread_usd, assumed_latency_ms, latency_buffer_k, tau_ms, stale_quote_ms,
 min_fill_ratio, vol_window, min_trade_size_btc, initial_usdt, initial_btc, name.
-With no --config-a/--config-b the built-in "wide-open" vs "strict" preset is used."""
+With no --config-a/--config-b the built-in "wide-open" vs "strict" preset is used.
+
+    # validate the unified convex detector (core.convex_arb.solve_arbitrage)
+    # against the separate scanner+triangular path, over the same ticks
+    python scripts/ab_test.py --dataset data/recordings/market_data.jsonl \\
+        --strategy convex --limit 20000 --fee-multiplier 0.3
+
+The --strategy convex mode answers: does the one convex program flag the same
+opportunities, does its "no arbitrage" certificate stay consistent, and what does
+the LP solve cost per tick. --fee-multiplier scales taker fees to model a
+maker/VIP tier (real fees rarely cross on top-of-book, so nothing trades at 1.0)."""
 
 from __future__ import annotations
 
@@ -28,6 +38,7 @@ import os
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from itertools import islice
 from pathlib import Path
 from random import Random
 
@@ -36,8 +47,17 @@ _BACKEND = Path(__file__).resolve().parent.parent / "backend"
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
+from core.convex_arb import DEFAULT_MIN_PROFIT_USD  # noqa: E402
+from core.convex_eval import compare_strategies, render_comparison  # noqa: E402
 from core.metrics_eval import RunMetrics, evaluate_run  # noqa: E402
-from core.replay import RunConfig, load_ticks, run_replay  # noqa: E402
+from core.replay import (  # noqa: E402
+    ReplayStats,
+    RunConfig,
+    load_ticks,
+    replay_ticks,
+    run_replay,
+)
+from core.triangular import DEFAULT_STABLECOIN_COST  # noqa: E402
 from models.market import BBO, Exchange  # noqa: E402
 
 
@@ -70,12 +90,15 @@ def build_configs() -> tuple[RunConfig, RunConfig]:
 _FUNDED = dict(initial_usdt=1_000_000.0, initial_btc=20.0)
 
 # Override-able RunConfig knobs grouped by how to coerce the string CLI value.
-_BOOL_KNOBS = frozenset({"apply_latency_buffer", "enable_microprice"})
+_BOOL_KNOBS = frozenset(
+    {"apply_latency_buffer", "enable_microprice", "include_withdrawal"}
+)
 _INT_KNOBS = frozenset({"vol_window", "stale_quote_ms"})
 _FLOAT_KNOBS = frozenset(
     {
         "min_net_spread_usd", "min_trade_size_btc", "tau_ms", "latency_buffer_k",
         "assumed_latency_ms", "min_fill_ratio", "initial_usdt", "initial_btc",
+        "fee_multiplier",
     }
 )
 _STR_KNOBS = frozenset({"name"})
@@ -238,28 +261,83 @@ def main(argv: list[str] | None = None) -> int:
         "--config-b", nargs="*", metavar="KEY=VAL", default=None,
         help="config B knobs, e.g. enable_microprice=true",
     )
+    parser.add_argument(
+        "--limit", type=int, default=None, metavar="N",
+        help="replay only the first N ticks of --dataset (handy for huge files)",
+    )
+    parser.add_argument(
+        "--diagnose", action="store_true",
+        help="print the per-stage funnel (where candidates die) for each config",
+    )
+    parser.add_argument(
+        "--strategy", choices=("classic", "convex"), default="classic",
+        help="classic = scanner+scorer+sizer A/B table (default); convex = "
+             "validate the unified core.convex_arb solver against scanner+triangular",
+    )
+    parser.add_argument(
+        "--fee-multiplier", type=float, default=1.0, metavar="M",
+        help="[convex] scale taker fees to model a maker/VIP tier (default 1.0)",
+    )
+    parser.add_argument(
+        "--stablecoin-cost", type=float, default=DEFAULT_STABLECOIN_COST, metavar="C",
+        help="[convex] USD↔USDT par-conversion spread per leg",
+    )
+    parser.add_argument(
+        "--min-profit-usd", type=float, default=DEFAULT_MIN_PROFIT_USD, metavar="U",
+        help="[convex] optimum below this is certified as no arbitrage",
+    )
     args = parser.parse_args(argv)
 
     if args.dataset is not None:
-        ticks = load_ticks(args.dataset)
-        source = f"{args.dataset} ({len(ticks)} ticks)"
+        ticks = _load_dataset(args.dataset, args.limit)
+        source = f"{args.dataset} ({len(ticks)} ticks{' [limited]' if args.limit else ''})"
     else:
         ticks = synth_ticks(args.synth, seed=args.seed)
         source = f"synthetic ({len(ticks)} ticks, seed={args.seed})"
+
+    if args.strategy == "convex":
+        with _quiet_solver():  # mute the cvxpy/CLARABEL native chatter from the LP
+            cmp = compare_strategies(
+                ticks,
+                fee_multiplier=args.fee_multiplier,
+                stablecoin_cost=args.stablecoin_cost,
+                min_profit_usd=args.min_profit_usd,
+            )
+        print()
+        print(render_comparison(cmp, source=source))
+        # Exit non-zero if convex and the classic detector genuinely disagree, so
+        # the validation can gate CI.
+        return 1 if cmp.mismatches else 0
 
     if args.config_a is not None or args.config_b is not None:
         config_a = make_config("A", args.config_a or [])
         config_b = make_config("B", args.config_b or [])
     else:
         config_a, config_b = build_configs()
+
+    stats_a, stats_b = ReplayStats(), ReplayStats()
     with _quiet_solver():  # mute the cvxpy/OSQP native chatter from the QP sizer
-        metrics_a = evaluate_run(run_replay(ticks, config_a), label=config_a.name)
-        metrics_b = evaluate_run(run_replay(ticks, config_b), label=config_b.name)
+        metrics_a = evaluate_run(run_replay(ticks, config_a, stats_a), label=config_a.name)
+        metrics_b = evaluate_run(run_replay(ticks, config_b, stats_b), label=config_b.name)
 
     print(f"\nDataset: {source}\n")
     print(render_table(metrics_a, metrics_b))
     print()
+    if args.diagnose:
+        for cfg, stat in ((config_a, stats_a), (config_b, stats_b)):
+            print(f"── funnel · {cfg.name} "
+                  f"(fee_multiplier={cfg.fee_multiplier}, "
+                  f"include_withdrawal={cfg.include_withdrawal}) ──")
+            print(stat.funnel())
+            print()
     return 0
+
+
+def _load_dataset(path: Path, limit: int | None) -> list[BBO]:
+    """Load a recording, optionally only its first ``limit`` ticks."""
+    if limit is None:
+        return load_ticks(path)
+    return list(islice(replay_ticks(path), limit))
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import circuit_breaker, health, metrics, opportunities, rebalance, trades, triangular
+from api.routes import circuit_breaker, funding, health, metrics, opportunities, rebalance, trades, triangular
 from config import settings
 from core import scanner
 from core.allocator import (
@@ -32,6 +32,7 @@ from core.risk_buffer import K_DEFAULT_95, passes_latency_buffer
 from core.stat_arb import get_stat_arb_detector, signal_to_dict
 from core.triangular import detect_triangular, set_latest_opportunities, triangular_to_dict
 from data.adapters import binance, bitstamp, bybit, coinbase, gemini, kraken, okx
+from data.adapters import funding as funding_adapter
 import data.bbo_state as bbo_state_module
 from db.connection import close_connection, get_connection
 from db.schema import initialize_schema
@@ -531,6 +532,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(bitstamp.run(), name="bitstamp-ws"),
         asyncio.create_task(bitstamp.run_depth(), name="bitstamp-depth"),
         asyncio.create_task(gemini.run(), name="gemini-ws"),
+        asyncio.create_task(funding_adapter.run(), name="funding-poller"),
         asyncio.create_task(_pipeline_loop(), name="pipeline"),
     ]
     if settings.demo_mode:
@@ -583,6 +585,7 @@ app.include_router(metrics.router, prefix="/api")
 app.include_router(circuit_breaker.router, prefix="/api")
 app.include_router(triangular.router, prefix="/api")
 app.include_router(rebalance.router, prefix="/api")
+app.include_router(funding.router, prefix="/api")
 
 
 @app.websocket("/ws/live")

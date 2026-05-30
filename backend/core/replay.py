@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import statistics
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import core.fees as fees_module
 from config import settings
 from core.executor import build_rejected_trade, simulate_execution
 from core.fees import OrderSide, calculate_fee, estimate_slippage
@@ -26,6 +27,7 @@ __all__ = [
     "load_ticks",
     "replay_ticks",
     "RunConfig",
+    "ReplayStats",
     "run_replay",
 ]
 
@@ -129,10 +131,20 @@ class RunConfig:
     # Almgren-Chriss latency-risk gate. assumed_latency_ms models the production
     # ws→decision delay the buffer protects against (replay compute time is
     # microseconds and not representative). Set apply_latency_buffer=False to disable.
+    # Default 10 ms: a permissive backtest assumption (low-latency colo), vs the
+    # ~50 ms a conservative wide-area path would assume.
     apply_latency_buffer: bool = True
     latency_buffer_k: float = K_DEFAULT_95
-    assumed_latency_ms: float = 50.0
+    assumed_latency_ms: float = 10.0
     vol_window: int = 50
+    # Cost-model levers — scoped over BOTH the scanner and the executor so the real
+    # pipeline runs unchanged but sees modeled economics. Defaults reproduce live
+    # costs exactly. On real top-of-book data, spatial spreads (~max 110 USD/BTC)
+    # do NOT clear round-trip taker fees (~min 147 USD/BTC), so trades only appear
+    # once these model a maker/VIP tier (fee_multiplier < ~0.7) and/or an
+    # inventory-amortized withdrawal (include_withdrawal=False).
+    fee_multiplier: float = 1.0
+    include_withdrawal: bool = True
     # settings overrides (None = leave the global default in place) ----------
     stale_quote_ms: int | None = None
     min_fill_ratio: float | None = None
@@ -191,6 +203,70 @@ def _settings_override(config: RunConfig):
             setattr(settings, k, v)
 
 
+@contextmanager
+def _cost_model_override(config: RunConfig):
+    """Scope a config's fee-model levers over the whole pipeline by mutating the
+    fees module's rate tables, restoring them on exit.
+
+    Both the scanner (net-spread gate) and the executor read these tables, so a
+    single override makes the real, unmodified pipeline price the trade under the
+    modeled economics — no plumbing of fee args through every call site.
+    """
+    fee_mult = config.fee_multiplier
+    if fee_mult < 0:
+        raise ValueError(f"fee_multiplier must be >= 0, got {fee_mult}")
+
+    saved_fees = fees_module._FEE_RATES
+    saved_withdrawal = fees_module._WITHDRAWAL_FEES_BTC
+    no_change = fee_mult == 1.0 and config.include_withdrawal
+    try:
+        if not no_change:
+            fees_module._FEE_RATES = {
+                ex: {side: rate * fee_mult for side, rate in sides.items()}
+                for ex, sides in saved_fees.items()
+            }
+            if not config.include_withdrawal:
+                fees_module._WITHDRAWAL_FEES_BTC = dict.fromkeys(saved_withdrawal, 0.0)
+        yield
+    finally:
+        fees_module._FEE_RATES = saved_fees
+        fees_module._WITHDRAWAL_FEES_BTC = saved_withdrawal
+
+
+@dataclass
+class ReplayStats:
+    """Per-stage funnel counters for one replay run — answers 'where do candidates
+    die?'. Populate by passing an instance to run_replay(..., stats=...)."""
+
+    ticks: int = 0                  # ticks consumed
+    state_ready: int = 0            # ticks with >= 2 venues in state (scannable)
+    opportunities_detected: int = 0 # ticks where the scanner returned >= 1 opp
+    opps_total: int = 0             # total scanner opps across all ticks
+    passed_min_spread: int = 0      # top opp cleared config.min_net_spread_usd
+    sized_ok: int = 0               # sizer produced a tradeable qty
+    insufficient_balance: int = 0   # sizer hit InsufficientBalanceError
+    qty_below_min: int = 0          # sized qty < min_trade_size_btc
+    passed_latency_buffer: int = 0  # cleared the Almgren-Chriss gate
+    executed: int = 0               # simulate_execution returned EXECUTED
+    rejected: Counter = field(default_factory=Counter)  # status -> count
+
+    def funnel(self) -> str:
+        lines = [
+            f"ticks consumed         : {self.ticks}",
+            f"state >= 2 venues      : {self.state_ready}",
+            f"scanner found opps     : {self.opportunities_detected}  (total opps: {self.opps_total})",
+            f"passed min-spread gate : {self.passed_min_spread}",
+            f"sized to tradeable qty : {self.sized_ok}  "
+            f"(insuff-balance: {self.insufficient_balance}, qty<min: {self.qty_below_min})",
+            f"passed latency buffer  : {self.passed_latency_buffer}",
+            f"EXECUTED               : {self.executed}",
+        ]
+        if self.rejected:
+            rej = ", ".join(f"{k}={v}" for k, v in sorted(self.rejected.items()))
+            lines.append(f"rejected by executor   : {rej}")
+        return "\n".join(lines)
+
+
 def _survives_latency_buffer(opp, qty: float, sigma: float, config: RunConfig) -> bool:
     """Almgren-Chriss gate, mirroring api.main._survives_latency_buffer but with a
     modeled production latency (replay has no real ws→decision delay)."""
@@ -212,9 +288,14 @@ def _survives_latency_buffer(opp, qty: float, sigma: float, config: RunConfig) -
     )
 
 
-def run_replay(ticks: Iterable[BBO], config: RunConfig) -> list[Trade]:
+def run_replay(
+    ticks: Iterable[BBO], config: RunConfig, stats: ReplayStats | None = None
+) -> list[Trade]:
     """Replay a recorded tick stream under one config and return every Trade the
     bot would have made — executed *and* rejected.
+
+    Pass a ReplayStats to collect the per-stage funnel (how many candidates die at
+    each gate) — useful for diagnosing why a dataset produces few/no trades.
 
     Per tick the engine rebuilds in-memory BBO state, scans all pairs, ranks by
     latency-adjusted expected profit, and acts on the single best opportunity:
@@ -243,13 +324,18 @@ def run_replay(ticks: Iterable[BBO], config: RunConfig) -> list[Trade]:
     vol = _SpreadVolTracker(config.vol_window)
     sizer = OptimalSizer(min_trade_size=config.min_trade_size_btc)
     trades: list[Trade] = []
+    st = stats if stats is not None else ReplayStats()
 
-    with _settings_override(config):
+    with ExitStack() as scope:
+        scope.enter_context(_settings_override(config))
+        scope.enter_context(_cost_model_override(config))
         for bbo in ticks:
+            st.ticks += 1
             state[bbo.exchange] = bbo
             vol.update(state)
             if len(state) < 2:
                 continue
+            st.state_ready += 1
 
             # Tick clock: the decision happens the instant this BBO arrives, so
             # staleness of the *other* legs is measured against a real timestamp
@@ -264,6 +350,8 @@ def run_replay(ticks: Iterable[BBO], config: RunConfig) -> list[Trade]:
             opportunities = scan_for_opportunities(state, now=now)
             if not opportunities:
                 continue
+            st.opportunities_detected += 1
+            st.opps_total += len(opportunities)
 
             # Ablate the micro-price signal by marking every opp confirmed, so the
             # scorer applies no micro-price penalty during ranking.
@@ -279,18 +367,23 @@ def run_replay(ticks: Iterable[BBO], config: RunConfig) -> list[Trade]:
             # Primary precision gate: ignore thin edges below the floor.
             if opp.net_spread < config.min_net_spread_usd:
                 continue
+            st.passed_min_spread += 1
 
             balance = wallets[opp.buy_exchange].usdt
             try:
                 qty = sizer.compute_optimal_qty(opp, balance)
             except InsufficientBalanceError:
+                st.insufficient_balance += 1
                 continue
             if qty < config.min_trade_size_btc:
+                st.qty_below_min += 1
                 continue
+            st.sized_ok += 1
 
             if config.apply_latency_buffer:
                 sigma = vol.sigma(opp.buy_exchange, opp.sell_exchange)
                 if not _survives_latency_buffer(opp, qty, sigma, config):
+                    st.rejected["REJECTED_LATENCY_RISK"] += 1
                     trades.append(
                         build_rejected_trade(
                             opp, qty, now, "REJECTED_LATENCY_RISK",
@@ -298,8 +391,13 @@ def run_replay(ticks: Iterable[BBO], config: RunConfig) -> list[Trade]:
                         )
                     )
                     continue
+            st.passed_latency_buffer += 1
 
             trade = simulate_execution(opp, qty, wallets, state, now=now, persist=False)
+            if trade.status == "EXECUTED":
+                st.executed += 1
+            else:
+                st.rejected[trade.status] += 1
             trades.append(trade.model_copy(update={"latency_ms": recorded_latency_ms}))
 
     return trades
