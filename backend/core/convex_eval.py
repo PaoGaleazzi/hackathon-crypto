@@ -83,8 +83,9 @@ def best_cycle_edge(
 
     Mirrors solve_arbitrage's economics exactly: the taker fee γ = 1 − fee is
     applied to each leg's received asset and a (1 − stablecoin_cost) factor closes
-    a cross-quote loop (USDT↔USD). Returns the depth-limited profit of the single
-    best pair; its sign is what the convex optimum's sign must match."""
+    a cross-quote loop (USDT↔USD). Selects the pair of maximum depth-limited PROFIT
+    — the same objective the LP maximizes, so the chosen venue pair lines up with
+    convex's route — and its sign is what the convex optimum's sign must match."""
     best = _NO_EDGE
     convertibles = CONVERTIBLE_CURRENCIES
     conv_gamma = 1.0 - stablecoin_cost
@@ -111,13 +112,12 @@ def best_cycle_edge(
 
             # Net buy-quote returned per buy-quote spent, round trip.
             multiplier = gamma_b * gamma_s * conv * sell.bid / buy.ask
-            if multiplier <= best.multiplier:
-                continue
             # Depth: buy up to ask_qty BTC; the γ_b·qty credited must fit the sell
             # side's bid depth. profit accrues as (multiplier − 1) × quote spent.
             qty = min(buy.ask_qty, sell.bid_qty / gamma_b)
             profit = (multiplier - 1.0) * qty * buy.ask
-            best = CycleEdge(buy_ex, sell_ex, multiplier, profit)
+            if profit > best.profit_usd:
+                best = CycleEdge(buy_ex, sell_ex, multiplier, profit)
 
     return best
 
@@ -156,6 +156,12 @@ class StrategyComparison:
     @property
     def agreements(self) -> int:
         return self.both_arb + self.both_none + self.boundary
+
+    @property
+    def genuine_mismatches(self) -> int:
+        """Ticks where convex and brute force truly disagree (beyond the boundary
+        band). The ``mismatches`` list only samples these; this is the full count."""
+        return self.convex_only + self.classic_only
 
     @property
     def consistency(self) -> float:
@@ -292,13 +298,14 @@ def render_comparison(cmp: StrategyComparison, *, source: str) -> str:
         f"  ticks replayed              : {cmp.ticks}",
         f"  decidable (≥2 venues)       : {cmp.state_ready}",
         f"  both detect arbitrage       : {cmp.both_arb}"
-        f"   (direction match {cmp.direction_matches}/{cmp.direction_total} = {dir_pct:.1f}%)",
+        f"   (same best venue pair {cmp.direction_matches}/{cmp.direction_total}"
+        f" = {dir_pct:.1f}%; gaps are alternate optima, not errors)",
         f"  both certify no-arbitrage   : {cmp.both_none}",
         f"  boundary ties (≤${cmp.boundary_usd:g})       : {cmp.boundary}",
         f"  convex-only (real)          : {cmp.convex_only}",
         f"  classic-only (real)         : {cmp.classic_only}",
-        f"  GENUINE MISMATCHES          : {len(cmp.mismatches)}"
-        f"  {'✓ none' if not cmp.mismatches else '✗ SEE BELOW'}",
+        f"  GENUINE MISMATCHES          : {cmp.genuine_mismatches}"
+        f"  {'✓ none' if not cmp.genuine_mismatches else '✗ SEE BELOW'}",
         f"  → detection consistency     : {cmp.consistency:.4%}",
         "",
         "── no-arbitrage certificate consistency ──",

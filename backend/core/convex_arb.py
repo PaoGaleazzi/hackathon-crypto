@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import cvxpy as cp
@@ -133,6 +134,38 @@ def _levels(
     return [(bbo.ask, bbo.ask_qty)], [(bbo.bid, bbo.bid_qty)]
 
 
+_ACCEPTABLE = (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
+
+
+def _solve(problem: cp.Problem) -> None:
+    """Solve the LP, escalating across solvers until one converges.
+
+    CLARABEL is fast and accurate on the well-scaled problem; on the rare
+    ill-conditioned tick it can hit its iteration cap (status 'user_limit'), so we
+    retry with a larger budget and finally fall back to SCS (a robust first-order
+    solver). On a no-arbitrage tick the optimum is a flat 0 and the conic solver
+    legitimately reports OPTIMAL_INACCURATE near that degenerate vertex — accepted
+    and treated as "no arbitrage" — so silence only that one expected warning.
+    """
+    attempts = (
+        (cp.CLARABEL, {}),
+        (cp.CLARABEL, {"max_iter": 50_000}),
+        (cp.SCS, {"max_iters": 50_000}),
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="Solution may be inaccurate", category=UserWarning
+        )
+        for solver, kwargs in attempts:
+            try:
+                problem.solve(solver=solver, **kwargs)
+            except cp.error.SolverError:
+                continue
+            if problem.status in _ACCEPTABLE and problem.value is not None:
+                return
+    raise RuntimeError(f"convex arbitrage solver failed: status {problem.status!r}")
+
+
 def solve_arbitrage(
     bbo_state: dict[Exchange, BBO],
     fees: dict[Exchange, float] | None = None,
@@ -186,6 +219,14 @@ def solve_arbitrage(
     venue_meta: dict[Exchange, tuple[str, np.ndarray, np.ndarray]] = {}
     total_cash_capacity = 0.0
 
+    # Numerical conditioning: BTC prices (~1e5) on O(1) quantities make the LP
+    # badly scaled — at low fees, where arbitrage is dense, the conic solver can
+    # exhaust its iteration budget. Normalize every price by a representative BTC
+    # price so the constraint data is O(1); the cash objective then comes out in
+    # units of `scale`, which we multiply back at the end. Quantities (BTC) are
+    # already O(1) and stay unscaled, so conservation Ψ_BTC = 0 is untouched.
+    scale = max(bbo_state[ex].ask for ex in exchanges)
+
     for ex in exchanges:
         quote = QUOTE_CURRENCY[ex]
         gamma = 1.0 - fees.get(ex, get_fee_rate(ex, OrderSide.TAKER))
@@ -201,16 +242,16 @@ def solve_arbitrage(
         constraints += [x <= ask_q, y <= bid_q]
         buy_vars[ex] = x
         sell_vars[ex] = y
-        venue_meta[ex] = (quote, ask_p, bid_p)
+        venue_meta[ex] = (quote, ask_p, bid_p)  # TRUE prices, for USD reporting
 
-        # Local flow: buys credit γ·x BTC and cost x·ask quote; sells deliver y
-        # BTC and credit γ·y·bid quote.
+        # Local flow (prices scaled): buys credit γ·x BTC and cost x·(ask/scale)
+        # quote; sells deliver y BTC and credit γ·y·(bid/scale) quote.
         psi_btc = psi_btc + gamma * cp.sum(x) - cp.sum(y)
-        quote_spent = ask_p @ x
-        quote_received = gamma * (bid_p @ y)
+        quote_spent = (ask_p / scale) @ x
+        quote_received = gamma * ((bid_p / scale) @ y)
         psi_cash[quote] = psi_cash[quote] + quote_received - quote_spent
 
-        total_cash_capacity += float(ask_p @ ask_q) + float(bid_p @ bid_q)
+        total_cash_capacity += float((ask_p / scale) @ ask_q) + float((bid_p / scale) @ bid_q)
 
     # USD↔USDT par conversion, modelled as one more market — only when both cash
     # currencies are actually present (otherwise no cross-currency loop to close).
@@ -240,18 +281,17 @@ def solve_arbitrage(
     objective = cp.Maximize(psi_cash["USD"] + psi_cash["USDT"])
 
     problem = cp.Problem(objective, constraints)
-    problem.solve(solver=cp.CLARABEL)
+    _solve(problem)
 
-    if problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) or problem.value is None:
-        raise RuntimeError(f"convex arbitrage solver failed: status {problem.status!r}")
-
-    profit = max(float(problem.value), 0.0)
+    # Rescale the objective (in units of `scale`) back to USD.
+    profit = max(float(problem.value) * scale, 0.0)
     is_arb = profit > min_profit_usd
 
     trades = _extract_trades(venue_meta, buy_vars, sell_vars, fees, active=is_arb)
     conversions = (
-        {k: round(float(v.value), 8) for k, v in conversion_vars.items()
-         if v.value is not None and float(v.value) > 1e-3}
+        # Conversion variables are in scaled-quote units → back to USD via `scale`.
+        {k: round(float(v.value) * scale, 8) for k, v in conversion_vars.items()
+         if v.value is not None and float(v.value) * scale > 1e-3}
         if is_arb else {}
     )
 

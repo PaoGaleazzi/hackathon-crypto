@@ -307,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         print(render_comparison(cmp, source=source))
         # Exit non-zero if convex and the classic detector genuinely disagree, so
         # the validation can gate CI.
-        return 1 if cmp.mismatches else 0
+        return 1 if cmp.genuine_mismatches else 0
 
     if args.config_a is not None or args.config_b is not None:
         config_a = make_config("A", args.config_a or [])

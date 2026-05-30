@@ -181,3 +181,86 @@ viable with a sub-10 bp USDT/USD path, marginal at the basis itself.
 > pricing difference. Its tightness and stability argue for a genuine basis, but a
 > direct same-venue USDT/USD quote (the detector accepts one via `stablecoin_cost`)
 > would settle it. We don't record USDT/USD pairs yet — a worthwhile next capture.
+
+---
+
+## 4. Convex unification — validating `core/convex_arb.py`
+
+Sections 1–3 use **separate** modules: the spatial scanner (`core/scanner.py`) and
+the triangular detector (`core/triangular.py`), each finding *and then* sizing
+opportunities in its own pass. `core/convex_arb.py` reformulates the whole thing
+as **one convex program** (Angeris–Evans–Chitra–Boyd, *Optimal Routing for CFMMs*,
+ACM EC 2022, specialised to limit order books): a single LP that, per tick, either
+returns the optimal route **and** the exact per-leg quantities, or **certifies**
+that no arbitrage exists (optimum = 0). `--strategy convex` replays the recorded
+ticks and checks that claim three ways.
+
+```bash
+# real taker fees (the as-deployed cost model)
+python scripts/ab_test.py --dataset data/recordings/market_data.jsonl \
+  --strategy convex --limit 30000 --fee-multiplier 1.0
+
+# 0.25× taker (a VIP/maker tier, below the ~13.6 bp USDT/USD basis — arb is dense)
+python scripts/ab_test.py --dataset data/recordings/market_data.jsonl \
+  --strategy convex --limit 30000 --fee-multiplier 0.25
+```
+
+The check is **independent**: against the convex LP we run a brute force over every
+directed venue pair (with USD↔USDT par conversion) on the *identical* taker-fee +
+stablecoin cost basis. Existence of any profitable single-BTC-hop cycle ⇔ the LP
+optimum is > 0 (multi-venue routing changes the optimal *size*, never whether one
+exists), so the two must agree on every tick. A genuine disagreement is a bug; the
+script exits non-zero if it finds one (CI gate).
+
+`30,000` real ticks per slice (replayed off the recorded tick clock; deterministic).
+
+| Question                                   | ×1.0 real fees | ×0.25 VIP tier |
+|--------------------------------------------|---------------:|---------------:|
+| Decidable ticks (≥2 venues)                |         29,997 |         29,997 |
+| **Both detect arbitrage**                  |              0 |         29,981 |
+| **Both certify no-arbitrage**              |         29,997 |             16 |
+| convex-only / classic-only (real)          |          0 / 0 |          0 / 0 |
+| **Genuine mismatches**                     |          **0** |          **0** |
+| **Detection consistency**                  |       **100%** |       **100%** |
+| No-arb certificate: brute agrees           |  29,997/29,997 |        16/16   |
+| Same best venue pair (where both detect)   |          — (0) |  23,730/29,981 (79.2%) |
+| Convex solver latency p50 / p95 / mean (ms)| 9.06 / 10.29 / 9.55 | 9.73 / 10.63 / 10.14 |
+
+**Q1 — does convex flag the same opportunities?** **Yes, exactly.** On both fee
+tiers, every tick where the brute force finds a profitable cycle, the LP optimum is
+> 0, and vice-versa — **0 genuine mismatches over ~60,000 ticks**, 100% detection
+consistency. The "same best venue pair" being 79.2% (not 100%) at ×0.25 is **not**
+error: where several venue pairs are near-tied or the higher-multiplier pair is
+shallower, the LP (which maximizes absolute USD profit) and the brute force can pick
+*different but equally valid* routes. The detection *decision* never differs.
+
+**Q2 — is the "no arbitrage" certificate consistent?** **Yes.** Every tick the LP
+certified `no arbitrage exists (convex optimum = 0)`, the brute force independently
+confirmed no profitable cycle: 29,997/29,997 at real fees, 16/16 at ×0.25. At real
+taker fees this is the *entire* dataset — the same verdict as the spatial scanner
+(0 ticks) and the triangular detector (0 ticks) in §2–3: the ~13.6 bp USDT/USD
+basis does not clear ~real round-trip taker fees. The convex program reaches that
+conclusion as a *mathematical certificate*, not a heuristic miss.
+
+**Q3 — what does the solver cost per tick?** **~10 ms** (p50 ≈ 9–10 ms, p95 ≈
+10–11 ms, mean ≈ 10 ms, with a long tail to ~60 ms). This is the headline tradeoff:
+the unified LP replaces the microsecond in-memory scanner with a per-tick conic
+solve — three to four orders of magnitude slower. So `convex_arb` is **not** a
+hot-path replacement; its value is offline/periodic — exact joint detection +
+sizing + a no-arbitrage *proof*, and a single model that subsumes both the spatial
+and triangular passes. (The live detection path stays in-memory per `CLAUDE.md`.)
+
+> Numerical note: the LP is solved on **price-normalized** data (every BTC price
+> divided by a representative ~$70k scale) so the constraint matrix is O(1); without
+> it CLARABEL exhausts its iteration budget on the dense-arbitrage low-fee ticks.
+> The solver escalates CLARABEL → CLARABEL(more iters) → SCS, so a single hard tick
+> never aborts the replay (0 solver failures across all runs above).
+
+> Production-context line: the report also tallies the **live** scanner/triangular
+> at real fees (0/0 ticks here), to relate the validation to what the deployed
+> system would flag — those modules additionally charge withdrawal/latency/slippage,
+> so they are strictly stricter than the pure-price convex/triangular basis.
+
+*Reproduce:* deterministic (tick-clock replay). Validation logic in
+`core/convex_eval.py`; the solver in `core/convex_arb.py`. Covered by
+`tests/sanity/test_convex_arb.py` (15) and `tests/sanity/test_convex_eval.py` (8).

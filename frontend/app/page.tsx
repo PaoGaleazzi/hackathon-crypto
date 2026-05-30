@@ -9,6 +9,7 @@ import { OpportunitiesTable } from '@/components/opportunities-table'
 import { TradesTable } from '@/components/trades-table'
 import { ZscorePanel } from '@/components/zscore-panel'
 import { TriangularPanel } from '@/components/triangular-panel'
+import { FundingPanel } from '@/components/funding-panel'
 import { GrossNetPanel } from '@/components/gross-net-panel'
 import { RebalanceStatus } from '@/components/rebalance-status'
 import { CircuitBreakerPanel } from '@/components/circuit-breaker-panel'
@@ -170,6 +171,9 @@ export default function Page() {
                 <ZscorePanel data={ws.zScore} history={ws.zScoreHistory} />
                 <TriangularPanel opportunities={triangularOpps} />
               </div>
+
+              {/* Funding-rate arbitrage (cash-and-carry + cross-exchange) */}
+              <FundingPanel />
 
               {/* Gross vs Net filter panel */}
               <GrossNetPanel opportunities={opportunities} />
